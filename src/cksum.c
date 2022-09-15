@@ -68,7 +68,8 @@ CRC32 CRC32_update_4   (CRC32 crc, uint8_t val){
 }
 extern CRC32 CRC32_update_N(CRC32 crc, uint8_t *data, int len);
 extern CRC32 CRC32K_update_N(CRC32 crc, uint8_t *data, int len);
-
+extern const struct _CRC_ctx CRC32_ctx;
+extern uint64_t 	CRC64_update_N(const struct _CRC_ctx * ctx,  uint64_t crc, uint8_t *data, int len);
 const char* description=
 "Утилита вычисления циклических контрольных сумм";
 int main(int argc, char *argv[])
@@ -87,12 +88,16 @@ int main(int argc, char *argv[])
     }
 //    int crc_alg_id=CRC_32B;
 
+	if (cli.list) {
+		printf("Список контрольных сумм:\n");
+	}
+
 	CRC32 CRC_xorin = ~0UL;
 	CRC32 CRC_xorout= ~0UL;
 
     size_t length = 0; // размер файла
-	#define BUFLEN 4096
-	uint8_t buf[BUFLEN];
+//	#define BUFLEN 4096
+	uint8_t buf[BUFSIZ];
     int i;
     for (i=1; i<argc; i++) {
         char* filename = argv[i];
@@ -106,7 +111,7 @@ int main(int argc, char *argv[])
         }
 
 		CRC32 crc = 0;//CRC_xorin;//~0UL;
-			while ((bytes_read = fread (buf, 1, BUFLEN, fp)) > 0)
+			while ((bytes_read = fread (buf, 1, BUFSIZ, fp)) > 0)
 			{
 				unsigned char *cp = buf;
 
@@ -118,13 +123,16 @@ int main(int argc, char *argv[])
 #if 0
 				while (bytes_read--)
 					crc = CRC32_update_4(crc, *cp++);
+#elif 0
+				crc = CRC32_update_N(crc, buf, bytes_read);
 #else
-				crc = CRC32K_update_N(crc, buf, bytes_read);
+	crc = CRC64_update_N(&CRC32_ctx, (uint64_t)crc<<32, buf, bytes_read)>>32;
 #endif
 				if (feof (fp))
 				break;
 			}
-		while (length){
+
+		if (1) while (length){
 			crc = CRC32_update_4(crc, length& 0xFF);
 			length>>=8;
 		}

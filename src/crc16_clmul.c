@@ -1282,7 +1282,7 @@ static const struct _CRC_ctx CRC8B_ctx= {
 [15] = {0x80, 0x03},// x^{63}, x^{-1}
 [ 0] = {0x81, 0x01},// x^{71}, x^{7}
 }};
-static const struct _CRC_ctx CRC32_ctx= {
+const struct _CRC_ctx CRC32_ctx= {
 .KBP = {0x04D101DF481B4E5A, 0x04C11DB700000000},
 .KF4 = {0xE6228B11, 0x8833794C},
 .KF3 = {0x8C3828A8, 0x64BF7A9B},
