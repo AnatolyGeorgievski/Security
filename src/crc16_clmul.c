@@ -2005,7 +2005,14 @@ CRC64 CRC64GO_update   (CRC64 crc, uint8_t val){
 	crc = (crc >> 4) ^ CRC64GO_Lookup4[crc & 0xF];
 	return crc;
 }
-#include "gf2m_64.h"
+//#include "gf2m_64.h"
+/*! таблица для редуцирования после умножения старшую часть по таблице добавить к остатку */
+const uint8_t gf2m_64[] = {
+0x00, 0x1B, 0x36, 0x2D,
+0x6C, 0x77, 0x5A, 0x41,
+0xD8, 0xC3, 0xEE, 0xF5,
+0xB4, 0xAF, 0x82, 0x99,
+};
 /*! Операция сдвига в конечном поле с редуцированием */
 uint64_t GF64_shlm   (uint64_t crc){
 	uint8_t cy = crc>>60;

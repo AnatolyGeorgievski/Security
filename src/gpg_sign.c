@@ -1,11 +1,13 @@
-/* GPG signature 
+/* GPG signature
  \see [RFC 4880] OpenPGP Message Format            November 2007
  https://datatracker.ietf.org/doc/html/rfc4880
+ \see [RFC 5581] The Camellia Cipher in OpenPGP, June 2009
  \see [RFC 6637] Elliptic Curve Cryptography (ECC) in OpenPGP
+ \see [RFC 7748] Elliptic Curves for Security, January 2016
+ \see [RFC 8017] PKCS #1: RSA Cryptography Specifications Version 2.2, November 2016
+ \see [RFC 8032] Edwards-Curve Digital Signature Algorithm (EdDSA), January 2017
+https://www.ietf.org/archive/id/draft-ietf-openpgp-crypto-refresh-07.html
 
-7.43
-9.10 header
-500 строк в день. Разбор завершен
 https://habr.com/ru/article/499746/#rec186465934
 
 $ gcc `pkg-config glib-2.0 --cflags` -o pgp gpg_sign.c \
@@ -13,23 +15,30 @@ $ gcc `pkg-config glib-2.0 --cflags` -o pgp gpg_sign.c \
  -lglib-2.0
 $ gcc -O3 -march=native  `pkg-config glib-2.0 --cflags` -o pgp gpg_sign.c gpg_armor.c \
 	rsa.c hmac.c sign.c base64.c \
-	mpz.c mpz_asm.c sha.c sha512.c -lglib-2.0
+	mpz.c mpz_asm.c sha.c sha512.c -lglib-2.0 -lz
+$ gcc -DGnuPG -march=native -O3 `pkg-config glib-2.0 --cflags` -o pgp \
+    gpg_armor.c gpg_sign.c \
+    rsa.c hmac.c sign.c base64.c \
+    mpz.c mpz_asm.c sha512.c sha.c gzip.c \
+    -lglib-2.0 -lintl -lz
 Тестирование - создание подписи
 $ gpg --detach-sign ghash.c
 
 	https://www.ietf.org/archive/id/draft-ietf-openpgp-crypto-refresh-03.html
+	https://datatracker.ietf.org/doc/html/draft-ietf-openpgp-crypto-refresh-06
+
  */
 #include <stdio.h>
-//#include "r3_args.h"
 #include <locale.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <glib.h>
+//#include "r3_args.h"
 #include "hmac.h"
 #include "sign.h"
-
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
 static inline uint16_t ntohs(uint16_t v){
 	return __builtin_bswap16(v);
 }
@@ -45,6 +54,9 @@ static inline uint32_t ntohl(uint32_t v){
 static inline uint64_t ntohll(uint64_t v){
 	return __builtin_bswap64(v);
 }
+#else
+
+#endif
 static void printhex(char* title, uint8_t* s, int len)
 {
 	printf("%s:", title);
@@ -97,7 +109,7 @@ static int r2_get_contents(char* filename, uint8_t** contents, size_t *length, v
     struct stat     statbuf;
     int res = stat(filename, &statbuf);
     if (res==0) {
-        char* data = malloc(statbuf.st_size);
+        uint8_t* data = malloc(statbuf.st_size);
         FILE * f = fopen(filename, "rb");
         if (f!=NULL) {
             *length = fread(data,1,statbuf.st_size, f);
@@ -167,7 +179,7 @@ static void* pgp_digest_init(const MDigest* md)
     md->init   (ctx);
 	return ctx;
 }
-static void pgp_digest_update(const MDigest* md, void * ctx, uint8_t* data, int len)
+static void pgp_digest_update(const MDigest* md, void * ctx, uint8_t* data, unsigned int len)
 {
 	md->update(ctx, data, len);
 }
@@ -193,38 +205,7 @@ static void pgp_digest_from_file(const MDigest* md, void * ctx, char* filename)
 #define FALSE 0
 #endif
 
-struct _CLI {
-    char* alg;
-    char* passwd;
-    char* import;
-    char* output_file;
-    int check;
-    int verbose;
-    int verify;
-    int print_md;
-    int armor;
-} cli = {
-.alg="gost",
-.passwd=NULL,
-.output_file=NULL,
-.check = FALSE,
-.verbose = FALSE,
-.verify = FALSE,
-.print_md = FALSE,
-.armor = FALSE,
-};
-static GOptionEntry entries[] =
-{
-  { "alg",      'a', 0, G_OPTION_ARG_STRING,    &cli.alg,   "crc algorithm", "crc32" },
-  { "import",   'i', 0, G_OPTION_ARG_FILENAME,  &cli.import,   "import key", "*.pgp" },
-  { "verbose",  'v', 0, G_OPTION_ARG_NONE,      &cli.verbose, "Be verbose", NULL },
-  { "verify",   'V', 0, G_OPTION_ARG_NONE,      &cli.verify,	"Verify signature", NULL },
-  { "armor",  	  0, 0, G_OPTION_ARG_NONE,      &cli.armor,  "Radix-64 ASCII encoding", NULL },
-  { "export",  	  0, 0, G_OPTION_ARG_NONE,      NULL,  "Export public keys", NULL },
-  { "export-secret-keys",  	  0, 0, G_OPTION_ARG_NONE,      NULL,  "Export secret keys", NULL },
-  { NULL }
-};
-/*! \brief 
+/*! \brief
 	\param[OUT] length длина имени файла
  */
 static char* pgp_signed_file(char* name, size_t *length){
@@ -233,9 +214,27 @@ static char* pgp_signed_file(char* name, size_t *length){
 		*length = len;
 		return g_strndup(name, len);
 	} else {
-		printf("--name: %s", name-4);
+		printf("-- name: %s", name-4);
 	}
 	return NULL;
+}
+static uint8_t* pgp_new_tag(uint8_t* s, int * type, size_t *len)
+{
+    *type = *s++ & 0x3F;
+    uint32_t body_len = *s++;
+    if (body_len < 192) {
+    } else
+    if (body_len < 224) {
+        body_len = ((body_len - 192)<<8)+(*s++)+192;
+    } else
+    if (body_len == 255) {
+        body_len = ntohl(*(uint32_t*)s);
+        s+=4;
+    } else {// Partial Body Lengths
+        body_len = 1uL<<(body_len & 0x1F);
+    }
+    *len = body_len;
+    return s;
 }
 static uint8_t* pgp_tag(uint8_t* s, int * type, size_t *len)
 {
@@ -249,7 +248,7 @@ static uint8_t* pgp_tag(uint8_t* s, int * type, size_t *len)
 	}
 	return s;
 }
-// перечисления 
+// перечисления
 static const char* const gpg_packet_tag_desc[]= {
 "\x00 Reserved",
 "\x01 Public-Key Encrypted Session Key Packet",
@@ -269,7 +268,8 @@ static const char* const gpg_packet_tag_desc[]= {
 "\x11 User Attribute Packet",
 "\x12 Sym. Encrypted and Integrity Protected Data Packet",
 "\x13 Modification Detection Code Packet",
-"\x14 Reserved (AEAD Encrypted Data)",
+"\x14 AEAD Encrypted Data Packet",
+// "60-63 Private or Experimental",
 };
 static const char* const gpg_signature_type_desc[]= {
 "\x00 Signature of a binary document",
@@ -279,6 +279,7 @@ static const char* const gpg_signature_type_desc[]= {
 "\x11 Persona certification of a User ID and Public-Key packet",
 "\x12 Casual certification of a User ID and Public-Key packet",
 "\x13 Positive certification of a User ID and Public-Key packet",
+"\x16 Attested Key Signature",
 "\x18 Subkey Binding Signature",
 "\x19 Primary Key Binding Signature",
 "\x1F Signature directly on a key",
@@ -323,32 +324,39 @@ static const char* const gpg_subpacket_desc[]= {
 [31] = "Signature Target",
 [32] = "Embedded Signature",
 [33] = "Issuer fingerprint",
-[34] = "Reserved (Preferred AEAD Algorithms)",
-[35] = "Reserved (Intended Recipient Fingerprint)",
+[34] = "Preferred AEAD Algorithms",
+[35] = "Intended Recipient Fingerprint",
 [36] = "Reserved",
-[37] = "Reserved (Attested Certifications)",
-[38] = "Reserved (Key Block)",
-
+[37] = "Attested Certifications",
+[38] = "Key Block",
+[39] = "Preferred AEAD Ciphersuites",
+[40] = "Literal Data Meta Hash",
+// 100 to 110 | Private or experimental
 };
 static const char* const gpg_cipher_algs[] = {
-"\x00 Plaintext",	
-"\x01 IDEA",	
-"\x02 TDES",	
-"\x03 CAST5",	
-"\x07 AES128",	
-"\x08 AES192",	
-"\x09 AES256",	
+"\x00 Plaintext",
+"\x01 IDEA",
+"\x02 TDES",
+"\x03 CAST5",
+"\x07 AES128",
+"\x08 AES192",
+"\x09 AES256",
 "\x0A Twofish",
 };
 static const char* const gpg_public_key_algs[] = {
 "\x01 RSA",
 "\x02 RSA Encrypt-Only",
-"\x03 RSA RSA Sign-Only",
+"\x03 RSA Sign-Only",
 "\x10 Elgamal (Encrypt-Only)",
 "\x11 DSA",
 "\x12 ECDH",
 "\x13 ECDSA",
-"\x16 EdDSA"
+//\x14 Reserved (formerly Elgamal Encrypt or Sign)
+//\x15 Reserved for Diffie-Hellman (X9.42, as defined for IETF-S/MIME)
+"\x16 EdDSA",
+//\x17 Reserved for AEDH
+//\x18 Reserved for AEDSA
+
 };
 static const char* const gpg_key_usage[] = {
 "-- certify other keys",
@@ -383,7 +391,7 @@ static const char* const gpg_hash_algs[] = {
 0x20 	This key may be used for authentication.
 0x80 	The private component of this key may be in the possession of more than one person.
 */
-/*! \brief заголовков и выделение длины суб пакетов 
+/*! \brief заголовков и выделение длины суб пакетов
 	Тип субпакета выделяется как последующий октет после выделения длины
  */
 static uint8_t* gpg_subpacket_header(uint8_t* s, size_t *len){
@@ -469,7 +477,7 @@ uint16_t hash[1];	//     - Two-octet field holding left 16 bits of signed hash v
 //     - One or more multiprecision integers comprising the signature.
 } __attribute__((packed));
 
-static const char* const pgp_type_desc[16] = {
+static const char* const pgp_type_desc[22] = {
 [0] = "Reserved - a packet tag MUST NOT have this value",
 [1] = "Public-Key Encrypted Session Key Packet",
 [2] = "Signature Packet",
@@ -485,10 +493,16 @@ static const char* const pgp_type_desc[16] = {
 [12] = "Trust Packet",
 [13] = "User ID Packet",
 [14] = "Public-Subkey Packet",
+[15] = "Reserved",
+[16] = "Reserved",
+[17] = "User Attribute Packet",
+[18] = "Sym. Encrypted and Integrity Protected Data Packet",
+[19] = "Reserved (formerly Modification Detection Code Packet)",
+[20] = "Reserved (formerly AEAD Encrypted Data Packet)",
+[21] = "Padding Packet",
 /*
-17       -- User Attribute Packet
-18       -- Sym. Encrypted and Integrity Protected Data Packet
-19       -- Modification Detection Code Packet
+22 to 39 --	Unassigned Critical Packet
+40 to 59 --	Unassigned Non-Critical Packet
 60 to 63 -- Private or Experimental Values*/
 };
 const char* description=
@@ -496,7 +510,7 @@ const char* description=
 struct _PGP_cert {
 	uint8_t* user_id;// utf8 string
 	uint32_t user_id_len;
-/* 
+/*
 	union {// \todo убрать
 		struct {
 			uint8_t* n;// modulus
@@ -514,7 +528,7 @@ struct _PGP_cert {
 	uint8_t* secret_subkey_data;
 	size_t   secret_subkey_len;
 	uint64_t public_key_id;
-	uint8_t* public_key_fingerprint;// versionID#SHA1(public_key) 
+	uint8_t* public_key_fingerprint;// versionID#SHA1(public_key)
 } pgp_cert = {0};
 
 void pgp_load(char* filename, struct _PGP_cert* pgp_cert);
@@ -527,11 +541,46 @@ struct _PGP_InputData {
 		uint8_t* str;
 		int len;
 	} octets;
-	
+
 };
 extern GSList* pgp_armor_dec(GSList* list, uint8_t* data, size_t length);
 
-int main(int argc, char *argv[]) 
+static struct _CLI {
+    char* alg;
+    char* passwd;
+    char* import;
+    char* output_file;
+    char* keyserver;
+    int check;
+    int verbose;
+    int verify;
+    int print_md;
+    int armor;
+} cli = {
+.alg="gost",
+.passwd=NULL,
+.output_file=NULL,
+.keyserver = NULL,
+.check = FALSE,
+.verbose = FALSE,
+.verify = FALSE,
+.print_md = FALSE,
+.armor = FALSE,
+};
+static GOptionEntry entries[] =
+{
+  { "alg",      'a', 0, G_OPTION_ARG_STRING,    &cli.alg,   "crc algorithm", "crc32" },
+  { "import",   'i', 0, G_OPTION_ARG_FILENAME,  &cli.import,   "import key", "*.pgp" },
+  { "verbose",  'v', 0, G_OPTION_ARG_NONE,      &cli.verbose, "Be verbose", NULL },
+  { "verify",   'V', 0, G_OPTION_ARG_NONE,      &cli.verify,	"Verify signature", NULL },
+  { "armor",  	  0, 0, G_OPTION_ARG_NONE,      &cli.armor,  "Radix-64 ASCII encoding", NULL },
+  { "export",  	  0, 0, G_OPTION_ARG_NONE,      NULL,  "Export public keys", NULL },
+  { "export-secret-keys",  	  0, 0, G_OPTION_ARG_NONE,      NULL,  "Export secret keys", NULL },
+  { "keyserver", 0,0, G_OPTION_ARG_STRING, &cli.keyserver, "LDAP Keyserver", "ldaps://ldap.example.com"},
+  { NULL }
+};
+#if defined(GnuPG)
+int main(int argc, char *argv[])
 {
     setlocale(LC_ALL, "");
     setlocale(LC_NUMERIC, "C");
@@ -557,13 +606,13 @@ int main(int argc, char *argv[])
 	}
 	if (filename!=NULL) {
 		if (cli.armor) {
-			uint8_t* contents=NULL; 
+			uint8_t* contents=NULL;
 			size_t length=0;
 			if (r2_get_contents(filename, &contents, &length, NULL)){
 				printf("file %s\n", filename);
 				GSList* gpg_blocks = NULL;
 				gpg_blocks = pgp_armor_dec(gpg_blocks, contents, length);
-				GSList* list = gpg_blocks; 
+				GSList* list = gpg_blocks;
 				while(list) {
 					PGP_InputData * idata = list->data;
 					pgp_parse(&pgp_cert, filename, idata->octets.str, idata->octets.len);
@@ -573,12 +622,14 @@ int main(int argc, char *argv[])
 		} else
 			pgp_load(filename, 	&pgp_cert);
 	}
-	return 0;  
+	return 0;
 }
+#endif // defined GnuPG
+
 /*! \brief Отпечаток открытого ключа v4
-	\note A V4 fingerprint is the 160-bit SHA-1 hash of the octet 0x99, 
-	followed by the two-octet packet length, followed by the entire 
-	Public-Key packet starting with the version field. The Key ID is 
+	\note A V4 fingerprint is the 160-bit SHA-1 hash of the octet 0x99,
+	followed by the two-octet packet length, followed by the entire
+	Public-Key packet starting with the version field. The Key ID is
 	the low-order 64 bits of the fingerprint. */
 uint8_t* pgp_v4_fingerprint(char* fingerprint, struct _PGP_cert* pgp_cert)
 {
@@ -595,19 +646,19 @@ uint8_t* pgp_v4_fingerprint(char* fingerprint, struct _PGP_cert* pgp_cert)
 	pgp_cert->public_key_id = ntohll(*(uint64_t*)(hash+md->hash_len-8+1));
 	printhex("fingerprint", hash, md->hash_len+1);
 	printf("Key ID: %016llX\n", pgp_cert->public_key_id);
-	return fingerprint;
+	return (uint8_t*)fingerprint;
 }
 /*!	\brief Отпечаток открытого ключа v5
-	\note A V5 fingerprint is the 256-bit SHA2-256 hash of the octet 0x9A, 
-	followed by the four-octet packet length, followed by the entire 
-	Public-Key packet starting with the version field. The Key ID is 
+	\note A V5 fingerprint is the 256-bit SHA2-256 hash of the octet 0x9A,
+	followed by the four-octet packet length, followed by the entire
+	Public-Key packet starting with the version field. The Key ID is
 	the high-order 64 bits of the fingerprint. */
 uint8_t* pgp_v5_fingerprint(char* fingerprint, struct _PGP_cert* pgp_cert)
 {
 	if (pgp_cert->public_key_data==NULL) return NULL;
 	const MDigest* md = digest_select(MD_SHA256);
 	uint8_t hash[md->hash_len+2];
-	uint8_t aad[4];
+	uint8_t aad[6];
 	void * ctx = pgp_digest_init(md);
 	aad[0] = 0x9A; *(uint32_t*)(aad+1) = htonl(pgp_cert->public_key_len);
 	pgp_digest_update(md, ctx, aad, 5);
@@ -615,22 +666,24 @@ uint8_t* pgp_v5_fingerprint(char* fingerprint, struct _PGP_cert* pgp_cert)
 	pgp_digest_fini(md, ctx, hash+1, md->hash_len);
 	hash[0] = 0x05;
 	pgp_cert->public_key_id = ntohll(*(uint64_t*)(hash+1));
+#if 1
 	if(cli.verbose) printhex("fingerprint", hash, md->hash_len+1);
 	if(cli.verbose) printf("Key ID: %016llX\n", pgp_cert->public_key_id);
-	return fingerprint;
+#endif
+	return (uint8_t*)fingerprint;
 }
 /*! */
 uint8_t * pgp_parse_key(uint8_t * s, size_t tag_len)
 {
-	int res = -1;
-	if (s[0] == 0x04) 
+	//int res = -1;
+	if (s[0] == 0x04)
 	{
 		s++;// s+= tag_len
 		// вынести разбор на второй этап
 		time_t time_created = ntohl(*(uint32_t*)(s)); s+=4;
 		uint8_t pkey_alg = *s++;
 		print_time("\tCreated", &time_created);
-		printf("\tKey Alg: (%hhd) %s\n", pkey_alg, 
+		printf("\tKey Alg: (%hhd) %s\n", pkey_alg,
 			name_lookup(pkey_alg, gpg_public_key_algs, sizeof(gpg_public_key_algs)/sizeof(gpg_public_key_algs[0])));
 		if (pkey_alg==1) {// RSA
 			uint16_t pkey_bitlen = ntohs(*(uint16_t*)s); s+=2;
@@ -641,10 +694,38 @@ uint8_t * pgp_parse_key(uint8_t * s, size_t tag_len)
 			if(cli.verbose)printhex("RSA public exp", s, (pexp_bitlen+7)/8);
 			//pgp_cert->public_key.rsa.e = s, pgp_cert->public_key.rsa.e_len = pexp_bitlen;
 			s+=(pexp_bitlen+7)/8;
-		} else 
+		} else
+		if (pkey_alg==22 || pkey_alg==19) {// EdDSA ECDSA
+            uint16_t oid_len = *s++;
+            if(cli.verbose)printhex("Curve OID", s, oid_len);
+            s += oid_len;
+            // MPI of an EC point representing a public key
+            uint16_t mpi_len = ntohs(*(uint16_t*)s); s+=2;//*s++;
+            if(cli.verbose)printhex("EC Point", s, (mpi_len+7)/8);
+            s += (mpi_len+7)/8;//mpi_len;
+		} else
+		if (pkey_alg==18) {// ECDH \see  5.5.5.6. Algorithm-Specific Part for ECDH Keys
+            // OID, MPI(point in curve-specific point format), KDFParams
+            uint16_t oid_len = *s++;
+            if(cli.verbose)printhex("Curve OID", s, oid_len);
+            s += oid_len;
+            // MPI of an EC point representing a public key
+            uint16_t mpi_len = ntohs(*(uint16_t*)s); s+=2;//*s++;
+            if(cli.verbose)printhex("EC Point", s, (mpi_len+7)/8);
+            s += (mpi_len+7)/8;//mpi_len;
+            /* A variable-length field containing KDF parameters: 0x01 hash_alg, wrap_alg
+                KEK SHA256 AES128 -> 0x01 08 07*/
+            /* The key wrapping method is described in [RFC3394].
+                The KDF produces a symmetric key that is used as a key-encryption key (KEK)
+                as specified in [RFC3394]. Refer to Section 12.5.1 for the details regarding the choice of the KEK algorithm,
+                which SHOULD be one of three AES algorithms.*/
+            uint16_t kdf_len = *s++;
+            if(cli.verbose)printhex("KDF params", s, kdf_len);
+            s += kdf_len;
+		} else
 			return NULL;
 	//	pgp_v4_fingerprint(NULL, pgp_cert);
-	} else 
+	} else
 		return NULL;
 	return s;
 }
@@ -653,14 +734,15 @@ int pgp_signature_verify(uint8_t* signature, struct _PGP_cert* pgp_cert, uint8_t
 {
 	uint8_t * pkey_modulus = pgp_cert->public_key_data+8;
 	uint32_t  pkey_length  = ntohs(*(uint16_t*)(pgp_cert->public_key_data+6));
+	//if(cli.verbose) printhex("public key", pkey_modulus, (pkey_length+7)/8);
 	RSA_Key* pKey = rsa_public_key_new(pkey_modulus, pkey_length);
-	int res = rsa_EME_pkcs_verify(signature,pKey, msg, mlen);
+	int res = rsa_EME_pkcs_verify(signature,pKey, msg, mlen);// RSA encrypted value m**e mod n.
 	rsa_public_key_free(pKey);
 	return res;
 }
 void pgp_load(char* filename, struct _PGP_cert* pgp_cert)
 {
-	uint8_t* contents=NULL; 
+	uint8_t* contents=NULL;
 	size_t length=0;
 
 //	if (!g_file_test(filename, G_FILE_TEST_EXISTS)) return -1;
@@ -670,32 +752,40 @@ void pgp_load(char* filename, struct _PGP_cert* pgp_cert)
 	}
 }
 /*! \brief Разбор формата в бинарном виде
-	\param filename имя файла используется для выделения присоединенной подписи. 
-	\todo отделить разбор от проверки сертификации. 
+	\param filename имя файла используется для выделения присоединенной подписи.
+	\todo отделить разбор от проверки сертификации.
 	По порядку загрузки не получается проверить все подписи, некоторые подписи могут быть подгружены позже.
-	Возможно следует в два захода проверять, сначала позитивную сертификацию, потом остальные подписи. 
+	Возможно следует в два захода проверять, сначала позитивную сертификацию, потом остальные подписи.
 	Позитивная сертификация подписывает сама себя.
  */
-void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, size_t length) 
+void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, size_t length)
 {
 	uint8_t* s = contents;
+    uint8_t* binary_data = NULL;
+    size_t binary_len = 0;
+
 	do {
-		if((s[0] & 0xC0)==0xC0){
-//			printf("%s -- GPG new format\n", filename);
-			break;
-		} else
-		if((s[0] & 0xC0)==0x80) {
-			printf("-- PGP format\n");
-			int V = cli.verbose;
+		if(1){
 			int type;
 			size_t tag_len;
-			s = pgp_tag(s, &type, &tag_len);
-			printf("type %d: '%s', Format v%hhd, length=%d\n", type, 
-				name_lookup(type, gpg_packet_tag_desc, sizeof(gpg_packet_tag_desc)/sizeof(gpg_packet_tag_desc[0])), 
-				s[0], tag_len);
+            if((s[0] & 0xC0)==0x80) {
+                printf("-- PGP format\n");
+                s = pgp_tag(s, &type, &tag_len);
+            } else
+            if((s[0] & 0xC0)==0xC0) {
+                printf("-- GPG new format\n");
+                s = pgp_new_tag(s, &type, &tag_len);
+            } else {
+                printf("-- tail %d\n", (s-contents)-length);
+                break;
+            }
+			printf("type %u: '%s', length=%d\n", type,
+				name_lookup(type, gpg_packet_tag_desc, sizeof(gpg_packet_tag_desc)/sizeof(gpg_packet_tag_desc[0])),
+				(unsigned)tag_len);
 
 //			if (V) printf("type %d -- '%s' length=%d\n", type, pgp_type_desc[type], tag_len);
 			if (type == 2) {// Signature Packet
+                uint8_t* packet = s;
 				if (s[0] == 0x03) {// v3 Signature
 					struct _pgp_signature_v3 *pgp_header = (struct _pgp_signature_v3 *)s;
 					printf(
@@ -705,22 +795,22 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 						"-- key id (%016llX)\n"
 						"-- pkey alg (%d) %s\n"
 						"-- hash alg (%d) %s\n",
-						pgp_header->version, 	pgp_header->sign_type, 
+						pgp_header->version, 	pgp_header->sign_type,
 						pgp_header->sign_time, 	pgp_header->key_id,
-						pgp_header->pkey_alg, 
+						pgp_header->pkey_alg,
 							name_lookup(pgp_header->pkey_alg, gpg_public_key_algs, sizeof(gpg_public_key_algs)/sizeof(gpg_public_key_algs[0])),
-						pgp_header->hash_alg, 
+						pgp_header->hash_alg,
 							name_lookup(pgp_header->hash_alg, gpg_hash_algs, sizeof(gpg_hash_algs)/sizeof(gpg_hash_algs[0]))
 					);
 				} else
-				if (s[0] == 0x04) {// v4 Signature
+				if (s[0] == 0x04/* || s[0]==0x05*/) {// v4 v5 Signature
 					struct _pgp_signature_v4 *gpg_header = (struct _pgp_signature_v4 *)s;
 					printf(
 						"-- version %d\n"
 						"-- sign type(%d) %s\n" // 0x00: Signature of a binary document.
 						"-- pkey alg (%d) %s\n" // 1 - RSA (Encrypt or Sign)
 						"-- hash alg (%d) %s\n",// 8 - SHA256
-						gpg_header->version, gpg_header->sign_type, 
+						gpg_header->version, gpg_header->sign_type,
 							name_lookup(gpg_header->sign_type, gpg_signature_type_desc, sizeof(gpg_signature_type_desc)/sizeof(gpg_signature_type_desc[0])),
 						gpg_header->pkey_alg,
 							name_lookup(gpg_header->pkey_alg, gpg_public_key_algs, sizeof(gpg_public_key_algs)/sizeof(gpg_public_key_algs[0])),
@@ -746,21 +836,35 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 //					case 0xE: digest_id = MD_SHA3_512; break;
 					}
 					const MDigest* md = digest_select(digest_id);
-					uint8_t hash[64];// 
+					uint8_t hash[md->hash_len];//
 					if (md) {
 						uint8_t aad[8];
 						void * ctx = pgp_digest_init(md);
 						switch(gpg_header->sign_type){
-						case 0x00: {// binary document signatures
-							size_t binary_len = 0;
-							char* binary_filename = pgp_signed_file(filename, &binary_len);
-							if (cli.verify && binary_filename!=NULL) {
-								pgp_digest_from_file(md, ctx, binary_filename);
+						case 0x00: {// Signature of a binary document.
+						    if (binary_data!=NULL){
+                                pgp_digest_update(md, ctx, binary_data, binary_len);
+						    } else
+							if (/* cli.verify && */filename!=NULL) {
+                                char* binary_filename = pgp_signed_file(filename, &binary_len);
+								if (binary_filename)
+                                    pgp_digest_from_file(md, ctx, binary_filename);
+							} else {
+
 							}
+
 						} break;
-						case 0x01: {// text document signatures
+						case 0x01: {// 0x01: Signature of a canonical text document.
+
 						} break;
+						case 0x02: {// 0x02: Standalone signature.
+						} break;
+
 						case 0x10 ... 0x13:
+                        // 0x10: Generic certification of a User ID and Public-Key packet.
+                        // 0x11: Persona certification of a User ID and Public-Key packet.
+                        // 0x12: Casual certification of a User ID and Public-Key packet.
+                        // 0x13: Positive certification of a User ID and Public-Key packet.
 						{// A certification signature (type 0x10 through 0x13))
 							// Public-Key Sign
 							aad[0] = 0x99; *(uint16_t*)(aad+1) = htons(pgp_cert->public_key_len);
@@ -771,18 +875,20 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 							pgp_digest_update(md, ctx, aad, 5);
 							pgp_digest_update(md, ctx, pgp_cert->user_id, pgp_cert->user_id_len);
 						} break;
-						case 0x18: 
-						case 0x19: {
-							// Public-Key 
+						case 0x18:  // 0x18: Subkey Binding Signature.
+						case 0x19: {// 0x19: Primary Key Binding Signature.
+							// Public-Key
 							aad[0] = 0x99; *(uint16_t*)(aad+1) = htons(pgp_cert->public_key_len);
 							pgp_digest_update(md, ctx, aad, 3);
 							pgp_digest_update(md, ctx, pgp_cert->public_key_data, pgp_cert->public_key_len);
-							// Public-SubKey 
+							// Public-SubKey
 							aad[0] = 0x99; *(uint16_t*)(aad+1) = htons(pgp_cert->public_subkey_len);
 							pgp_digest_update(md, ctx, aad, 3);
 							pgp_digest_update(md, ctx, pgp_cert->public_subkey_data, pgp_cert->public_subkey_len);
 						} break;
-						default: 
+						case 0x1F: // 0x1F: Signature directly on a key.
+                            break;
+						default:
 							break;
 						}
 						uint32_t hashed_data_len = s-(uint8_t*)gpg_header;
@@ -792,7 +898,7 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 						pgp_digest_fini(md, ctx, hash, md->hash_len);
 						if (cli.verbose) printhex("digest", hash, md->hash_len);
 					}
-					
+
 					uint16_t data_len = ntohs(*(uint16_t*) s); s+=2;
 					printf("-- data subpacket len %hd\n", data_len);
 					//printhex("data", s, data_len);
@@ -800,21 +906,71 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 					s+=data_len;
 					uint16_t hash_v16 = ntohs(*(uint16_t*) s); s+=2;// старшие 16 бит хеша, для проверки
 					printf("-- hash octets.. %04hX ..%s\n", hash_v16, hash_v16==ntohs(*(uint16_t*)hash)?"ok":"fail");
-					uint16_t sign_len = ntohs(*(uint16_t*) s); s+=2;
-					uint8_t* signature = s;
-					printf("-- sign len %d\n", sign_len);
-					printhex("sign", s, (sign_len+7)/8);
-					if(pgp_cert->public_key_data==NULL) {
-						printf("Нужен ключ проверки подписи! Без ключа не проверить.\n"
-							"# pgp --import pablic_key.pgp --verify FILE.sig\n"
-						);
-					} else
-					if(md!=NULL && pgp_signature_verify(signature, pgp_cert, hash, md->hash_len)){
-						printf("Сертификация пройдена!\n");
-					} else 
-						printf("Сертификация НЕ пройдена!\n");
-					s += (sign_len+7)/8;
+                /*  One or more multiprecision integers comprising the signature.
+                    This portion is algorithm-specific: */
+                    switch (gpg_header->pkey_alg) {
+                    case 0x11: // DSA
+                    case 0x13: // ECDSA
+                    case 0x16: // EdDSA
+                    {
+                        uint16_t R_len = ntohs(*(uint16_t*) s); s+=2;
+                        uint8_t* R = s;
+                        s += (R_len+7)/8;
+                        uint16_t S_len = ntohs(*(uint16_t*) s); s+=2;
+                        uint8_t* S = s;
+                        s += (S_len+7)/8;
+                        if (cli.verbose) {
+                            printhex("R", R, (R_len+7)/8);
+                            printhex("S", S, (S_len+7)/8);
+                        }
+                    } break;
+                    case 0x01:
+                    case 0x03:
+                    { // RSA
+                        uint16_t sign_len = ntohs(*(uint16_t*) s); s+=2;
+                        uint8_t* signature = s;
+                        printf("-- sign len %d\n", sign_len);
+                        if (cli.verbose) printhex("sign", s, (sign_len+7)/8);
+                        if (pgp_cert->public_key_data==NULL) {
+                            printf("Нужен ключ проверки подписи! Без ключа не проверить.\n"
+                                "# pgp --import public_key.pgp --verify FILE.sig\n"
+                            );
+                        } else
+                        if(md!=NULL && pgp_signature_verify(signature, pgp_cert, hash, md->hash_len)){
+                            printf("Сертификация пройдена!\n");
+                        } else
+                            printf("Сертификация НЕ пройдена!\n");
+                        s += (sign_len+7)/8;
+                    } break;
+                    default:
+                        break;
+                    }
+					s = packet + tag_len;
+				} else {
+				    //printf("Signature unknown version %X\n", s[0]);
+				    s+= tag_len;
+				    //break;
 				}
+			} else
+			if (type == 4){// One-Pass Signature Packet
+				if (s[0] == 0x03) {// v3 Signature
+					printf(
+						"-- version %d\n"
+						"-- sign type(%d) %s\n"
+						"-- pkey alg (%d) %s\n"
+						"-- hash alg (%d) %s\n"
+						"-- key id (%016llX)\n"
+						"-- flags (%02X)\n",
+						s[0], 	s[1],
+						name_lookup(s[1], gpg_signature_type_desc, sizeof(gpg_signature_type_desc)/sizeof(gpg_signature_type_desc[0])),
+                        s[3],
+                        name_lookup(s[3], gpg_public_key_algs, sizeof(gpg_public_key_algs)/sizeof(gpg_public_key_algs[0])),
+                        s[2],
+                        name_lookup(s[2], gpg_hash_algs, sizeof(gpg_hash_algs)/sizeof(gpg_hash_algs[0])),
+                        ntohll(*(uint64_t*)&s[4]), s[12]
+					);
+				}
+                s+= 13;//tag_len;
 			} else
 			if (type == 5){// Secret-Key Packet
 				pgp_cert->public_key_data = s;
@@ -844,19 +1000,52 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 				}
 				s+=tag_len;
 			} else
-			if (type == 14){// Public-Subkey Packet
-				pgp_cert->public_subkey_data = s;
-				pgp_cert->public_subkey_len  = tag_len;
-				if(cli.verbose) pgp_parse_key(s, tag_len);
-				s+=tag_len;
-			} else 
+			if (type == 8){// Compressed Data Packet
+			    uint8_t compression_alg = s[0];// 0=Uncompressed, 1=ZIP [RFC1951], 2=ZLIB [RFC1950],3=BZip2 [BZ2]
+			    if(cli.verbose) printf("Compression: (%d)\n", compression_alg);
+			    if (compression_alg==1) {//ZIP
+extern int zip_decompress(uint8_t ** dst, int * dlen, uint8_t * src, int slen);
+                    int unwrap_len = 0;
+                    uint8_t* dst;
+                    int res = zip_decompress(&dst, &unwrap_len, &s[1], length - (s+1 - contents));
+                    printf("decompress %d len=%d\n", res, unwrap_len);//length - (s-contents));
+                    if (res!= 1) {// Z_STREAM_END
+                        printhex("data", s, length - (s-contents));
+                    }
+                    s = contents = dst;
+                    length = unwrap_len;
+                    continue;
+			    }
+                if ((unsigned)tag_len == ~0u) break;
+			} else
+			if (type == 11){// Literal Data Packet (Tag 11)
+			    uint8_t tag = s[0];// b - binary
+                uint8_t name_len = s[1];
+                char* name = &s[2];
+                printf("-- filename: %-.*s\n", (int)name_len, name);
+                time_t timestamp;
+                timestamp = ntohl(*(uint32_t*)(s+2+name_len));
+                print_time("\tmdate: ", &timestamp);
+                binary_data = s+6+name_len;// данные для подписи или сохранения
+                binary_len = tag_len-(6+name_len);
+                s+=tag_len;
+			} else
 			if (type == 13){// User ID Packet (Tag 13)
 				printf("\tUser ID: %-.*s\n", (int)tag_len, s);
 				pgp_cert->user_id = s;
 				pgp_cert->user_id_len = tag_len;
 				s+= tag_len;
-			} else {
+			} else
+			if (type == 14){// Public-Subkey Packet
+				pgp_cert->public_subkey_data = s;
+				pgp_cert->public_subkey_len  = tag_len;
+				if(cli.verbose) pgp_parse_key(s, tag_len);
+				s+=tag_len;
+			} else
+			{
+			    printf("undefined type -- %d\n", type);
 				s+= tag_len;
+				break;
 			}
 		} else {
 			printf("%s -- %02X\n", filename, s[0]);

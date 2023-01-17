@@ -11,7 +11,7 @@ struct _PGP_InputData {
 		uint8_t* str;
 		int len;
 	} octets;
-	
+
 };
 
 typedef uint32_t CRC24;
@@ -65,7 +65,7 @@ int CRC24_selftest()
 	for(i=0; i<9; i++){
 		crc = CRC24_update_4(crc, test[i]);
 	}
-	printf("CRC-24/OpenPGP -- self test..%s\n", (crc)==CRC24_CHECK?"ok":"fail"); 
+	printf("CRC-24/OpenPGP -- self test..%s\n", (crc)==CRC24_CHECK?"ok":"fail");
 	return (crc)==CRC24_CHECK;
 }
 #if 0 // заголовки в файлах арморед.
@@ -83,30 +83,30 @@ GSList* pgp_armor_dec(GSList* list, uint8_t* data, size_t length)
 	int offset = 0;
 	uint8_t* s = data;
 	while (s[0]!='\0'
-	  && !(s[0]=='-' && strncmp(s, "-----BEGIN PGP ", 15)==0)) 
+	  && !(s[0]=='-' && strncmp(s, "-----BEGIN PGP ", 15)==0))
 		s++;
 	offset = s - data;
+
+
 	if (offset != length) {
 	while (strncmp(s, "-----BEGIN PGP ", 15)==0)
 	{
-		
 		s+=15;
 		offset = s - data;
-		
 		while (s[0]!='-' && s[0]!='\0') s++;
 
 		if (s[0]!='\0' && strncmp(s, "-----", 5)==0){
 			int name_len = s - &data[offset];
 			char* name = g_strndup(data+offset, name_len);
 			s+=5;
-			if (s[0]=='\n') s++;
+			//if (s[0]=='\n') s++;
 			// пропустить комментарии
 			uint8_t* comment = s;
-			while (s[0]!=0 && !(s[0]=='\n' && s[1]=='\n')) s++;
-			g_print("%-.*s\n", s-comment, comment);
+			while (s[0]!=0 && !((s[0]=='\n' && s[1]=='\n') || strncmp(s,"\r\n\r\n",4)==0)) s++;
+			g_print("'%-.*s'\n", s-comment, comment);
 			if(s[0]!=0) s+=2;
 			offset = s - data;
-			while (s[0]!=0 && !(s[0]=='\n' && s[1]=='=') && s[0]!='-') s++;
+			while (s[0]!=0 && !(s[0]=='\n' && (s[1]=='=')/*((s[1]=='=') || (s[1]=='\n' && s[2]=='='))*/) && s[0]!='-') s++;
 			int data_len = s - &data[offset];
 			uint32_t crc24=0;
 			if (s[0]=='\n' && s[1]=='='){
@@ -114,7 +114,7 @@ GSList* pgp_armor_dec(GSList* list, uint8_t* data, size_t length)
 				uint8_t crc_buf[4];
 				base64_dec(crc_buf, s, 4);
 				crc24 = (uint32_t)crc_buf[0] << 16 | (uint32_t)crc_buf[1] << 8 | (uint32_t)crc_buf[2];
-				//g_print("CRC24=0x%06X\n", crc24);
+				g_print("CRC24=0x%06X\n", crc24);
 			}
 			while (s[0]!=0 && !(s[0]=='-' && strncmp(s, "-----END PGP ", 13)==0 && strncmp(&s[13], name, name_len)==0
 				   && strncmp(&s[13+name_len], "-----", 5)==0)) s++;
@@ -136,6 +136,7 @@ GSList* pgp_armor_dec(GSList* list, uint8_t* data, size_t length)
 				if(0) g_print("data:\n%-.*s\n", data_len, data+offset);
 				s+=13+name_len+5;
 				if (s[0]=='\n') s++;
+			} else {
 			}
 			g_free(name);
 		}
@@ -144,7 +145,7 @@ GSList* pgp_armor_dec(GSList* list, uint8_t* data, size_t length)
 	return list;
 }
 #ifdef TEST_ARMOR
-int main(int argc, char *argv[]) 
+int main(int argc, char *argv[])
 {
     setlocale(LC_ALL, "");
     setlocale(LC_NUMERIC, "C");

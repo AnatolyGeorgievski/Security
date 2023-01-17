@@ -1,5 +1,7 @@
 /*! \brief The Keyed-Hash Message Authentication Code (HMAC)
 
+	Copyright (C) 2012-2022 Anatoly Georgievskii <Anatoly.Georgievski@gmail.com>
+
     Генерация секретных хешей HMAC_SHA256
 
     \see [FIPS PUB 198-1] The Keyed-Hash Message Authentication Code (HMAC), July 2008
@@ -25,15 +27,16 @@
 	применению алгоритмов электронной цифровой
 	подписи и функции хэширования
 
-
-
+Сборка для тестирования:
+$ gcc -march=native -DTEST_HMAC -O3 -o hmac hmac.c r3_slist.c r3_slice.c \
+	stribog.c sha.c sha512.c md5.c gosthash.c
  */
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <glib.h>
-//#include "r3_slist.h"
+//#include <glib.h>
+#include "r3_slist.h"
 #include "hmac.h"
 
 //typedef uint32_t v4si __attribute__((__vector_size__(16)));
@@ -787,6 +790,7 @@ int main()
         for (i=0; i<80 && md_tests[i].msg; i++)
         {
             const MDigest *md = digest_select(md_tests[i].id);// MD_STRIBOG_256_digest;
+			if (md==NULL) continue;
             digest(md, hash, md->hash_len, (uint8_t*)md_tests[i].msg, strlen(md_tests[i].msg));
 //    for(i=0; i<8;i++) printf(" %016" PRIX64, ctx.H[i]); printf("\n");
             if (memcmp(hash, md_tests[i].hash, md->hash_len)==0) printf("%d %s OK\n", i, md->name);
@@ -1061,6 +1065,7 @@ int main()
         for (i=0; i<80 && hmac_tests[i].msg; i++)
         {
             const MDigest *md = digest_select(hmac_tests[i].id);// MD_STRIBOG_256_digest;
+			if (md==NULL) continue;
             hmac(md, hash, md->hash_len, (uint8_t*)hmac_tests[i].msg, hmac_tests[i].mlen, (uint8_t*)hmac_tests[i].key, hmac_tests[i].klen);
 //    for(i=0; i<8;i++) printf(" %016" PRIX64, ctx.H[i]); printf("\n");
             if (memcmp(hash, hmac_tests[i].hash, hmac_tests[i].hash_len)==0) printf("%d HMAC %s OK\n", i, md->name);
@@ -1379,6 +1384,7 @@ int main()
         {
             //if (pbkdf2_tests[i].c> 4096) continue;
             const MDigest *md = digest_select(pbkdf2_tests[i].id);// MD_STRIBOG_256_digest;
+			if (md==NULL) continue;
             pbkdf2_hmac(md, dk, pbkdf2_tests[i].dklen, (uint8_t*)pbkdf2_tests[i].pass, pbkdf2_tests[i].plen, (uint8_t*)pbkdf2_tests[i].salt, pbkdf2_tests[i].slen, pbkdf2_tests[i].c);
             if (__builtin_memcmp(dk, pbkdf2_tests[i].dk,pbkdf2_tests[i].dklen)==0) printf("%d PBKDF2-HMAC %s OK\n", i, md->name);
             else
@@ -1598,6 +1604,7 @@ int main()
         for (i=0; i<80 && hkdf_tests[i].Hash; i++)
         {
             const MDigest *md = digest_select(hkdf_tests[i].Hash);// MD_SHA256;
+			if (md==NULL) continue;
 			HKDF_Extract(md, prk, (uint8_t*)hkdf_tests[i].IKM, hkdf_tests[i].klen, (uint8_t*)hkdf_tests[i].salt, hkdf_tests[i].slen);
             if (__builtin_memcmp(prk, hkdf_tests[i].PRK, md->hash_len)==0) {
                 printf("%d HKDF-Extract %s OK\n", i+1, md->name);
@@ -1612,6 +1619,7 @@ int main()
         for (i=0; i<80 && hkdf_tests[i].Hash; i++)
         {
             const MDigest *md = digest_select(hkdf_tests[i].Hash);// MD_SHA256;
+			if (md==NULL) continue;
 			HKDF_Expand(md, (uint8_t*)hkdf_tests[i].PRK, okm, hkdf_tests[i].L, (uint8_t*)hkdf_tests[i].info, hkdf_tests[i].ilen);
             if (__builtin_memcmp(okm, hkdf_tests[i].OKM, hkdf_tests[i].L)==0) {
                 printf("%d HKDF-Expand %s OK\n", i+1, md->name);

@@ -529,10 +529,16 @@ D. Canright, A Very Compact S-box for AES
  */
 uint8_t gf2p8_composite_inverse(uint8_t x, uint32_t Poly) {
 	const uint8_t inv13[16] = {0x0,0x1,0x9,0xE,0xD,0xB,0x7,0x6,0xF,0x2,0xC,0x5,0xA,0x4,0x3,0x8};
+	const uint8_t mul_N[16] = {0x0,0xC,0xB,0x7,0x5,0x9,0xE,0x2,0xA,0x6,0x1,0xD,0xF,0x3,0x4,0x8};
+	const uint8_t sqr_N[16] = {0x0,0xC,0x5,0x9,0x7,0xB,0x2,0xE,0xF,0x3,0xA,0x6,0x8,0x4,0xD,0x1};
+// редуцирование старшей части при умножении без переносов
+	const uint8_t red13[16] = {0x0,0x3,0x6,0x5,0xC,0xF,0xA,0x9,0xB,0x8,0xD,0xE,0x7,0x4,0x1,0x2};
 	const uint8_t N = 0xC, P4 = Poly;
 	uint8_t a1 = x>>4;
 	uint8_t a0 = x&0xF;
 	uint8_t D  = gf2p4_mul(a0,a0^a1, P4) 
+//		^ sqr_N[a1]; - возведение в квадрат и умножение на константу
+//		^ mul_N[gf2p4_mul(a1, a1, P4)];
 		^ gf2p4_mul(gf2p4_mul(a1, a1, P4), N, P4); // это тоже таблица, объединить возведение в квадрат
 	uint8_t d  = inv13[D];
 	uint8_t b0 = gf2p4_mul(a0^a1, d, P4);
@@ -991,8 +997,9 @@ uint8_t map_ab_test(uint8_t g, uint32_t P1, uint8_t g2, uint32_t P2)
 	} while (1);
 	return g2;
 }
-if (0){// вывод всех матриц изоморфного преобразования
+if (1){// вывод всех матриц изоморфного преобразования
 	P1 = 0x11B;
+printf("матрицы изоморфных преобразований %03X\n", P1);
 	for (i=0;i<30; i++) {
 		//if (P1!=irp[i]) 
 		map_ab_test(2, irp[i], 1, P1);
@@ -1002,6 +1009,9 @@ printf("матрицы гомоморфных преобразований\n");
 		//if (P1!=irp[i]) 
 		map_ab_test(2, irp[i], 2, irp[i]);
 	}
+	P1 = 0x11B;P2 = 0x163;
+printf("матрицы изоморфных преобразований %03X\n", P2);
+	y = map_ab_test(0x4A, P2, 1, P1);
 	// 18D=>1F5 02 03 M =FFAACC88F0A0C080 Mt =FFAACC88F0A0C080
 	m_print(0xFFAACC88F0A0C080);
 	return 0;
@@ -1531,6 +1541,10 @@ void poly2(uint8_t g, uint8_t P1){
 	printf("\n");
 	printf("полином %02X редуцирование\n", P1);
 	for (i=0;i<16; i++)	printf("%X,", gf2p4_mul(P1&0xF, i, P1));
+	printf("\n");
+	uint8_t C = 0xC;
+	printf("полином %02X умножение на константу %01X*x^2\n", P1, C);
+	for (i=0;i<16; i++)	printf("%X,", gf2p4_mul(C, gf2p4_mul(i,i,P1), P1));
 	printf("\n");
 	
 	initialize_inv4(inv19, 0x2, P1=0x19);
