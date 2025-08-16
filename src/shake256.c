@@ -17,6 +17,9 @@ SHA-3 Derived Functions: cSHAKE, KMAC, TupleHash and ParallelHash
 (https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-185.pdf)
 
 Тестирование:
+
+\see (https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines/example-values)
+
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-224_1600.pdf
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-256_1600.pdf
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-384_1600.pdf
@@ -25,6 +28,8 @@ SHA-3 Derived Functions: cSHAKE, KMAC, TupleHash and ParallelHash
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-384_msg0.pdf
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-256_msg0.pdf
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-224_msg0.pdf
+* https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Standards-and-Guidelines/documents/examples/SHAKE256_Msg0.pdf
+* https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Standards-and-Guidelines/documents/examples/SHAKE128_Msg0.pdf
 
 * https://csrc.nist.gov/csrc/media/projects/cryptographic-standards-and-guidelines/documents/examples/sha3-384_msg30.pdf
 
@@ -200,8 +205,7 @@ static void print_state(char* title, uint64x5_t a0, uint64x5_t a1, uint64x5_t a2
     printf("\n");
 }
 
-static
-void KeccakF1600(uint64_t * s, int nr)
+static void KeccakF1600(uint64_t * s, int nr)
 {
     uint64x5_t A0, A1, A2, A3, A4;
     //uint64x5_t B0, B1, B2, B3, B4;
@@ -321,7 +325,7 @@ void KeccakF1600(uint64_t * s, int nr)
 // iota
         A0[0] = A0[0] ^ RC[ir];
     }
-    if(1) print_state("After Permutation", A0, A1, A2, A3, A4);
+    if(0) print_state("After Permutation", A0, A1, A2, A3, A4);
 #ifdef __AVX512F__
     _mm512_mask_storeu_epi64(s   , mask, (__m512i)A0);
     _mm512_mask_storeu_epi64(s+5 , mask, (__m512i)A1);
@@ -364,41 +368,84 @@ static inline void _pad(uint8_t *buf, uint8_t CS, int r, size_t len){
     buf[len] ^= CS;// 0x06 для HASH, 0x04 для cSHAKE128, 0x1F для XOF
     buf[r-1] ^= 0x80;
 }
-static void absorb(uint64x8_t *S, unsigned offs, const uint8_t *data, const unsigned int r){
+static void absorb(uint64x8_t *S, const uint8_t *data, unsigned int len){
     uint64x8_t v;
     int i;
-    for (i=0; i<r/sizeof(uint64x8_t); i++){
+    for (i=0; i<len/sizeof(uint64x8_t); i++){
         __builtin_memcpy(&v, data, sizeof(uint64x8_t));
         S[i] ^= v;
         data+=sizeof(uint64x8_t);
     }
-    if (r%sizeof(uint64x8_t)){
+    len = len%sizeof(uint64x8_t);
+    if (len){
         v ^= v;
-        __builtin_memcpy(&v, data, r%sizeof(uint64x8_t));
+        __builtin_memcpy(&v, data, len);
         S[i] ^= v;
     }
 }
-void _sponge(const int8_t *data, size_t len, uint8_t *tag, int d, uint8_t CS, unsigned int r){
+/*! \brief SPONGE - губка для кодирования (absorb) байтовой строки и генерации (squeeze). 
+
+    Метод KECCAK[c] использует функцию KECCAK-p[1600, 24] для кодирования и генерации. 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные
+    \param d  - длина выходных данных
+    \param CS - метка для кодирования байтовой строки 0x06 - для SHA3, 0x1F - для SHAKE
+    \param r - размер блока в байтах (b-c)/8
+ */
+static void _sponge(const int8_t *data, size_t len, uint8_t *tag, int d, uint8_t CS, unsigned int r){
     //const unsigned int r = 168;
     __attribute__((aligned(64)))
-    uint64x8_t S[1600/(8*8)]={0};
+    uint64x8_t S[256/(8*8)]={0};
     for (int i=0; i<len/r; i++, data+=r){// число целых блоков
-        absorb(S, 0, data, r);
+        absorb(S, data, r);
         KeccakF1600((uint64_t*)S, 24);
     }
     if (len%r){
-        absorb(S, 0, data, len%r);
+        absorb(S, data, len%r);
     }
     _pad((uint8_t*)S, CS, r, len%r);
     KeccakF1600((uint64_t*)S, 24);
     // отжим губки
-    while (d<r) {
+    while (d>r) {
         __builtin_memcpy(tag, S, r);
         d -= r; tag += r;
         KeccakF1600((uint64_t*)S, 24);
     }
     __builtin_memcpy(tag, S, d);
 }
+/*! \brief SHAKE-256 eXtendable Output Function 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные
+    \param d - длина выходных данных в байтах
+ */
+void shake256(const int8_t *data, size_t len, uint8_t *tag, int d){
+    _sponge(data, len, tag, d, 0x1F, 136);
+}
+/*! \brief SHAKE-128 eXtendable Output Function 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные
+    \param d - длина выходных данных в байтах
+ */
+void shake128(const int8_t *data, size_t len, uint8_t *tag, int d){
+    _sponge(data, len, tag, d, 0x1F, 168);
+}
+void sha3_224(const int8_t *data, size_t len, uint8_t *tag){
+    _sponge(data, len, tag, 224/8, 0x06, 144);
+}
+void sha3_256(const int8_t *data, size_t len, uint8_t *tag){
+    _sponge(data, len, tag, 256/8, 0x06, 136);
+}
+void sha3_512(const int8_t *data, size_t len, uint8_t *tag){
+    _sponge(data, len, tag, 512/8, 0x06, 72);
+}
+void sha3_384(const int8_t *data, size_t len, uint8_t *tag){
+    _sponge(data, len, tag, 384/8, 0x06, 104);
+}
+
+
 /* Размер блока в байтах:
    (r)
 // 168 = 160+8 8x4*5+8 SHAKE128
@@ -407,6 +454,7 @@ void _sponge(const int8_t *data, size_t len, uint8_t *tag, int d, uint8_t CS, un
 // 104 =  96+8 8x4*3+8
 //  72 =  64+8 8x4*2+8 SHA3-512
 */
+#if 0//ndef TEST_SHA3
 #include "hmac.h"
 typedef struct _HashCtx HashCtx;
 struct _HashCtx{
@@ -461,7 +509,7 @@ static void sha3_512_final(HashCtx* ctx, uint8_t* tag, unsigned int tlen) {
     KeccakF1600(ctx->S, 24);
     __builtin_memcpy(tag, ctx->S, tlen);
 }
-#ifndef TEST_SHA3
+
 MESSAGE_DIGEST(MD_SHA3_256) {
     .id = MD_SHA3_256,
     .name = "SHA3-256",
@@ -485,6 +533,7 @@ MESSAGE_DIGEST(MD_SHA3_512) {
 #endif
 
 #include <stdio.h>
+static void print_hash(const char* title, uint8_t* tag, int len);
 int main(int argc, char** argv)
 {
     const int w = 64;// разрядность
@@ -524,5 +573,93 @@ int main(int argc, char** argv)
         0x8000000000000000, 
     };
     KeccakF1600((uint64_t*)S, 24);
+    unsigned tlen = 512;
+    uint8_t tag[512];
+    shake256("", 0, tag, tlen); 
+    // valid tag
+    // 46 B9 DD ... 3E EB 24
+    // 1F D1 66 ... E2 7F 2A
+    printf("SHAKE256 XOF(512):\n");
+    for (int i=0; i<tlen; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+    printf("\n");
+    shake128("", 0, tag, tlen); 
+    // valid 
+    // 7F 9C 2B ... 05 85 3E
+    // DD A2 52 ... 29 0B 6F
+    printf("SHAKE128 XOF(512):\n");
+    for (int i=0; i<tlen; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+    sha3_224("", 0, tag); 
+    printf("SHA3-224 Hash(0):\n");
+    for (int i=0; i<224/8; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+    printf("\n");
+/* Hash val is
+    6B 4E 03 42 36 67 DB B7 3B 6E 15 45 4F 0E B1 AB
+    D4 59 7F 9A 1B 07 8E 3F 5B 5A 6B C7 */
+    sha3_256("", 0, tag); 
+    printf("SHA3-256 Hash(0):\n");
+    for (int i=0; i<256/8; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+/* Hash val is
+    A7 FF C6 F8 BF 1E D7 66 51 C1 47 56 A0 61 D6 62
+    F5 80 FF 4D E4 3B 49 FA 82 D8 0A 4B 80 F8 43 4A */
+    sha3_384("", 0, tag); 
+    printf("SHA3-384 Hash(0):\n");
+    for (int i=0; i<384/8; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+/* Hash val is
+    0C 63 A7 5B 84 5E 4F 7D 01 10 7D 85 2E 4C 24 85
+    C5 1A 50 AA AA 94 FC 61 99 5E 71 BB EE 98 3A 2A
+    C3 71 38 31 26 4A DB 47 FB 6B D1 E0 58 D5 F0 04 */
+    sha3_512("", 0, tag); 
+    printf("SHA3-512 Hash(0):\n");
+    for (int i=0; i<512/8; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+/* Hash val is
+    A6 9F 73 CC A2 3A 9A C5 C8 B5 67 DC 18 5A 75 6E
+    97 C9 82 16 4F E2 58 59 E0 D1 DC C1 47 5C 80 A6
+    15 B2 12 3A F1 F5 F9 4C 11 E3 E9 40 2C 3A C5 58
+    F5 00 19 9D 95 B6 D3 E3 01 75 85 86 28 1D CD 26 */
+    uint8_t dataA3[1600/8] = { [0 ... 199]= 0xA3};
+    sha3_224(dataA3, 1600/8, tag); 
+    print_hash("SHA3-224 Hash(1600/8)", tag, 224/8);
+/* Hash val is
+    93 76 81 6A BA 50 3F 72 F9 6C E7 EB 65 AC 09 5D
+    EE E3 BE 4B F9 BB C2 A1 CB 7E 11 E0 */
+    sha3_256(dataA3, 1600/8, tag); 
+    print_hash("SHA3-256 Hash(1600/8)", tag, 256/8);
+/* Hash val is
+    79 F3 8A DE C5 C2 03 07 A9 8E F7 6E 83 24 AF BF
+    D4 6C FD 81 B2 2E 39 73 C6 5F A1 BD 9D E3 17 87 */
+    sha3_512(dataA3, 1600/8, tag); 
+    print_hash("SHA3-512 Hash(1600/8)", tag, 512/8);
+/* Hash val is
+    E7 6D FA D2 20 84 A8 B1 46 7F CF 2F FA 58 36 1B
+    EC 76 28 ED F5 F3 FD C0 E4 80 5D C4 8C AE EC A8
+    1B 7C 13 C3 0A DF 52 A3 65 95 84 73 9A 2D F4 6B
+    E5 89 C5 1C A1 A4 A8 41 6D F6 54 5A 1C E8 BA 00 */
     return 0;
+}
+static void print_hash(const char* title, uint8_t* tag, int len){
+    printf("%s:\n", title);
+    int i;
+    for (i=0; i<len; i++) {
+        printf("%02X ", tag[i]);
+        if (i%16==15) printf("\n");
+    }
+    if (i%16) printf("\n");
 }
