@@ -121,49 +121,38 @@ static inline
 uint64x5_t theta(uint64x5_t a){
     uint64x5_t a0 = __builtin_shufflevector(a, a, 4, 0, 1, 2, 3, 5,6,7);
     uint64x5_t a1 = __builtin_shufflevector(a, a, 1, 2, 3, 4, 0, 5,6,7);
-    return a0 ^ ((a1<<1)|(a1>>63));
+    return a0 ^ ((a1<<1)|(a1>>63));// ROTL(63)
 }
-static inline
-void transpose(uint64x5_t *r, uint64x5_t r0, uint64x5_t r1,uint64x5_t r2,uint64x5_t r3,uint64x5_t r4){
-/* pi: сдвиг и транспонирование матрицы
+/* pi: сдвиг и транспонирование матрицы 5x5
 0, 3, 1, 4, 2,
 1, 4, 2, 0, 3,
 2, 0, 3, 1, 4,
 3, 1, 4, 2, 0,
 4, 2, 0, 3, 1,
-
-r0 r1 r2 r3 r4
-0 1 2 3 4 5 6 7
-0 3 1 4 2 5 6 7
- 8  9 10 11 12 13 14 15
-12 10  8 11  9
 */
-#if 1
+static inline
+void pi_transpose(uint64x5_t *r, uint64x5_t r0, uint64x5_t r1,uint64x5_t r2,uint64x5_t r3,uint64x5_t r4){
     r0 = __builtin_shufflevector(r0, r0, 0, 3, 1, 4, 2, 5,6,7);// старшие 3 бита по маске 0x1F, не используются
     r1 = __builtin_shufflevector(r1, r1, 1, 4, 2, 0, 3, 5,6,7);
     r2 = __builtin_shufflevector(r2, r2, 2, 0, 3, 1, 4, 5,6,7);
     r3 = __builtin_shufflevector(r3, r3, 3, 1, 4, 2, 0, 5,6,7);
-    r4 = __builtin_shufflevector(r4, r4, 4, 2, 0, 3, 1, 5,6,7);
-    uint64x5_t t0 = __builtin_shufflevector(r0, r1, 0, 8, 2, 10, 4, 12, 6, 14);// unpacklo
-    uint64x5_t t1 = __builtin_shufflevector(r0, r1, 1, 9, 3, 11, 5, 13, 7, 15);// unpackhi
-    uint64x5_t t2 = __builtin_shufflevector(r2, r3, 0, 8, 2, 10, 4, 12, 6, 14);
-    uint64x5_t t3 = __builtin_shufflevector(r2, r3, 1, 9, 3, 11, 5, 13, 7, 15);
-#else // todo объединить 
-    uint64x5_t t0 = __builtin_shufflevector(r0, r1, 0, 8, 2, 10, 4, 12, 6, 14);// unpacklo
-    uint64x5_t t1 = __builtin_shufflevector(r0, r1, 1, 9, 3, 11, 5, 13, 7, 15);// unpackhi
-    uint64x5_t t2 = __builtin_shufflevector(r2, r3, 0, 8, 2, 10, 4, 12, 6, 14);
-    uint64x5_t t3 = __builtin_shufflevector(r2, r3, 1, 9, 3, 11, 5, 13, 7, 15);
-#endif
-    uint64x5_t s0 = __builtin_shufflevector(t0, t2, 0, 1, 8,  9, 4, 5, 12, 13);
-    uint64x5_t s1 = __builtin_shufflevector(t1, t3, 0, 1, 8,  9, 4, 5, 12, 13);
-    uint64x5_t s2 = __builtin_shufflevector(t0, t2, 2, 3,10, 11, 6, 7, 14, 15);
-    uint64x5_t s3 = __builtin_shufflevector(t1, t3, 2, 3,10, 11, 6, 7, 14, 15);
+    r4 = __builtin_shufflevector(r4, r4, 4, 2, 0, 3, 1, 5,6,7);// -- заменил индексы
+    register uint64x5_t t0, t1, t2, t3;
+    t0 = __builtin_shufflevector(r0, r1, 0, 8, 2, 10, 4, 12, 6, 14);// unpacklo
+    t1 = __builtin_shufflevector(r0, r1, 1, 9, 3, 11, 5, 13, 7, 15);// unpackhi
+    t2 = __builtin_shufflevector(r2, r3, 0, 8, 2, 10, 4, 12, 6, 14);
+    t3 = __builtin_shufflevector(r2, r3, 1, 9, 3, 11, 5, 13, 7, 15);
+
+    r0 = __builtin_shufflevector(t0, t2, 0, 1, 8,  9, 4, 5, 12, 13);
+    r1 = __builtin_shufflevector(t1, t3, 0, 1, 8,  9, 4, 5, 12, 13);
+    r2 = __builtin_shufflevector(t0, t2, 2, 3,10, 11, 6, 7, 14, 15);
+    r3 = __builtin_shufflevector(t1, t3, 2, 3,10, 11, 6, 7, 14, 15);
 // эти сдвиги соответствуют транспонированию матрицы
-    r[0] = __builtin_shufflevector(s0, r4, 0, 1, 2, 3, 8, 9, 10, 11);
-    r[1] = __builtin_shufflevector(s1, r4, 0, 1, 2, 3, 9, 8, 11, 10);
-    r[2] = __builtin_shufflevector(s2, r4, 0, 1, 2, 3, 10,11, 12, 13);
-    r[3] = __builtin_shufflevector(s3, r4, 0, 1, 2, 3, 11,12, 13, 12);
-    r[4] = __builtin_shufflevector(s0, r4, 4, 5, 6, 7, 12,13, 14, 15);
+    r[0] = __builtin_shufflevector(r0, r4, 0, 1, 2, 3, 8,  9,  10, 11);
+    r[1] = __builtin_shufflevector(r1, r4, 0, 1, 2, 3, 9,  10, 11, 12);
+    r[2] = __builtin_shufflevector(r2, r4, 0, 1, 2, 3, 10, 11, 12, 13);
+    r[3] = __builtin_shufflevector(r3, r4, 0, 1, 2, 3, 11, 12, 13, 14);
+    r[4] = __builtin_shufflevector(r0, r4, 4, 5, 6, 7, 12, 13, 14, 15);
 }
 static inline
 uint64x5_t rho(uint64x5_t a, uint64x5_t s){
@@ -207,15 +196,14 @@ static void print_state(char* title, uint64x5_t a0, uint64x5_t a1, uint64x5_t a2
 
 static void KeccakF1600(uint64_t * s, int nr)
 {
-    uint64x5_t A0, A1, A2, A3, A4;
-    //uint64x5_t B0, B1, B2, B3, B4;
+    register uint64x5_t A0, A1, A2, A3, A4;
 #ifdef __AVX512F__
     __mmask8 mask = 0x1F;
-    A0 = (uint64x5_t)_mm512_maskz_loadu_epi64(mask, s);
-    A1 = (uint64x5_t)_mm512_maskz_loadu_epi64(mask, s+5);
-    A2 = (uint64x5_t)_mm512_maskz_loadu_epi64(mask, s+10);
-    A3 = (uint64x5_t)_mm512_maskz_loadu_epi64(mask, s+15);
-    A4 = (uint64x5_t)_mm512_maskz_loadu_epi64(mask, s+20);
+    A0 = (uint64x5_t)_mm512_maskz_load_epi64(mask, s);
+    A1 = (uint64x5_t)_mm512_maskz_load_epi64(mask, s+5);
+    A2 = (uint64x5_t)_mm512_maskz_load_epi64(mask, s+10);
+    A3 = (uint64x5_t)_mm512_maskz_load_epi64(mask, s+15);
+    A4 = (uint64x5_t)_mm512_maskz_load_epi64(mask, s+20);
 #else
     for (int i=0;i<5;i++) {
         A0[i] = s[i];
@@ -225,96 +213,27 @@ static void KeccakF1600(uint64_t * s, int nr)
         A4[i] = s[i+20];
     }
 #endif
-    for (int ir=0; ir<nr; ir++) {// 5*3=15 регистров
+    const uint64x5_t rh[5] = {// сдвиговые константы для rho
+        { 0,  1, 62, 28, 27},
+        {36, 44,  6, 55, 20},
+        { 3, 10, 43, 25, 39},
+        {41, 45, 15, 21,  8},
+        {18,  2, 61, 56, 14}};
+
+    for (int ir=0; ir<nr; ir++) {
         uint64x5_t D = theta(A0 ^ A1 ^ A2 ^ A3 ^ A4);
-
         if(0)print_state("After theta", A0^D, A1^D, A2^D, A3^D, A4^D);
-/*      C[0] = A0[0]^A1[0]^A2[0]^A3[0]^A4[0];
-        C[1] = A0[1]^A1[1]^A2[1]^A3[1]^A4[1];
-        C[2] = A0[2]^A1[2]^A2[2]^A3[2]^A4[2];
-        C[3] = A0[3]^A1[3]^A2[3]^A3[2]^A4[3];
-        C[4] = A0[4]^A1[4]^A2[4]^A3[4]^A4[4];
-
-        D[0] = C[4] ^ ROTL(C[1], 1);
-        D[1] = C[0] ^ ROTL(C[2], 1);
-        D[2] = C[1] ^ ROTL(C[3], 1);
-        D[3] = C[2] ^ ROTL(C[4], 1);
-        D[4] = C[3] ^ ROTL(C[0], 1);
-*/
 // rho
         uint64x5_t r[5];
-        r[0] = rho(A0^D, (uint64x5_t){ 0,  1, 62, 28, 27});
-        r[1] = rho(A1^D, (uint64x5_t){36, 44,  6, 55, 20});
-        r[2] = rho(A2^D, (uint64x5_t){ 3, 10, 43, 25, 39});
-        r[3] = rho(A3^D, (uint64x5_t){41, 45, 15, 21,  8});
-        r[4] = rho(A4^D, (uint64x5_t){18,  2, 61, 56, 14});
-        if(0)print_state("After rho", r[0], r[1], r[2], r[3], r[4]);
-/*      B0[0] =     (A0[0]^D[0]);
-        B0[1] = ROTL(A0[1]^D[1], 63);
-        B0[2] = ROTL(A0[2]^D[2],  2);
-        B0[3] = ROTL(A0[3]^D[3], 36);
-        B0[4] = ROTL(A0[4]^D[4], 37);
-
-        B1[0] = ROTL(A1[0]^D[0], 28);
-        B1[1] = ROTL(A1[1]^D[1], 20);
-        B1[2] = ROTL(A1[2]^D[2], 58);
-        B1[3] = ROTL(A1[3]^D[3],  9);
-        B1[4] = ROTL(A1[4]^D[4], 44);
-
-        B2[0] = ROTL(A2[0]^D[0], 61);
-        B2[1] = ROTL(A2[1]^D[1], 54);
-        B2[2] = ROTL(A2[2]^D[2], 21);
-        B2[3] = ROTL(A2[3]^D[3], 39);
-        B2[4] = ROTL(A2[4]^D[4], 25);
-
-        B3[0] = ROTL(A3[0]^D[0], 23);
-        B3[1] = ROTL(A3[1]^D[1], 19);
-        B3[2] = ROTL(A3[2]^D[2], 49);
-        B3[3] = ROTL(A3[3]^D[3], 43);
-        B3[4] = ROTL(A3[4]^D[4], 56);
-
-        B4[0] = ROTL(A4[0]^D[0], 46);
-        B4[1] = ROTL(A4[1]^D[1], 62);
-        B4[2] = ROTL(A4[2]^D[2],  3);
-        B4[3] = ROTL(A4[3]^D[3],  8);
-        B4[4] = ROTL(A4[4]^D[4], 50);*/
-// pi (permutation) вращение по кругу, сводится к транспонированию 5x5 и сдвигам
-#if 1
-        transpose(r, r[0], r[1], r[2], r[3], r[4]);
+        A0 = rho(A0^D, rh[0]);
+        A1 = rho(A1^D, rh[1]);
+        A2 = rho(A2^D, rh[2]);
+        A3 = rho(A3^D, rh[3]);
+        A4 = rho(A4^D, rh[4]);
+        if(0)print_state("After rho", A0, A1, A2, A3, A4);
+// pi (permutation) вращение по кругу, сводится к пермутации строк и транспонированию 5x5
+        pi_transpose(r, A0, A1, A2, A3, A4);
         if(0)print_state("After pi", r[0], r[1], r[2], r[3], r[4]);
-#else   
-// pi:
-        A0[0] = r[0][0];
-        A0[1] = r[1][1];
-        A0[2] = r[2][2];
-        A0[3] = r[3][3];
-        A0[4] = r[4][4];
-
-        A1[0] = r[0][3];
-        A1[1] = r[1][4];
-        A1[2] = r[2][0];
-        A1[3] = r[3][1];
-        A1[4] = r[4][2];
-
-        A2[0] = r[0][1];
-        A2[1] = r[1][2];
-        A2[2] = r[2][3];
-        A2[3] = r[3][4];
-        A2[4] = r[4][0];
-
-        A3[0] = r[0][4];
-        A3[1] = r[1][0];
-        A3[2] = r[2][1];
-        A3[3] = r[3][2];
-        A3[4] = r[4][3];
-
-        A4[0] = r[0][2];
-        A4[1] = r[1][3];
-        A4[2] = r[2][4];
-        A4[3] = r[3][0];
-        A4[4] = r[4][1];
-        if(0)print_state("After pi", A0, A1, A2, A3, A4);
-#endif
 // chi
         A0 = chi(r[0]);
         A1 = chi(r[1]);
@@ -327,11 +246,11 @@ static void KeccakF1600(uint64_t * s, int nr)
     }
     if(0) print_state("After Permutation", A0, A1, A2, A3, A4);
 #ifdef __AVX512F__
-    _mm512_mask_storeu_epi64(s   , mask, (__m512i)A0);
-    _mm512_mask_storeu_epi64(s+5 , mask, (__m512i)A1);
-    _mm512_mask_storeu_epi64(s+10, mask, (__m512i)A2);
-    _mm512_mask_storeu_epi64(s+15, mask, (__m512i)A3);
-    _mm512_mask_storeu_epi64(s+20, mask, (__m512i)A4);
+    _mm512_mask_store_epi64(s   , mask, (__m512i)A0);
+    _mm512_mask_store_epi64(s+5 , mask, (__m512i)A1);
+    _mm512_mask_store_epi64(s+10, mask, (__m512i)A2);
+    _mm512_mask_store_epi64(s+15, mask, (__m512i)A3);
+    _mm512_mask_store_epi64(s+20, mask, (__m512i)A4);
 #else
     for (int i=0;i<5;i++) {
         s[i   ] = A0[i];
@@ -368,6 +287,11 @@ static inline void _pad(uint8_t *buf, uint8_t CS, int r, size_t len){
     buf[len] ^= CS;// 0x06 для HASH, 0x04 для cSHAKE128, 0x1F для XOF
     buf[r-1] ^= 0x80;
 }
+/*! \brief метод для впитывания байтовой строки в губку буфера состояния. 
+    \param S - буфер состояния
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+ */
 static void absorb(uint64x8_t *S, const uint8_t *data, unsigned int len){
     uint64x8_t v;
     int i;
@@ -393,7 +317,7 @@ static void absorb(uint64x8_t *S, const uint8_t *data, unsigned int len){
     \param CS - метка для кодирования байтовой строки 0x06 - для SHA3, 0x1F - для SHAKE
     \param r - размер блока в байтах (b-c)/8
  */
-static void _sponge(const int8_t *data, size_t len, uint8_t *tag, int d, uint8_t CS, unsigned int r){
+static void _sponge(const uint8_t *data, size_t len, uint8_t *tag, int d, uint8_t CS, unsigned int r){
     //const unsigned int r = 168;
     __attribute__((aligned(64)))
     uint64x8_t S[256/(8*8)]={0};
@@ -420,7 +344,7 @@ static void _sponge(const int8_t *data, size_t len, uint8_t *tag, int d, uint8_t
     \param tag - выходные данные
     \param d - длина выходных данных в байтах
  */
-void shake256(const int8_t *data, size_t len, uint8_t *tag, int d){
+void shake256(const uint8_t *data, size_t len, uint8_t *tag, int d){
     _sponge(data, len, tag, d, 0x1F, 136);
 }
 /*! \brief SHAKE-128 eXtendable Output Function 
@@ -429,19 +353,39 @@ void shake256(const int8_t *data, size_t len, uint8_t *tag, int d){
     \param tag - выходные данные
     \param d - длина выходных данных в байтах
  */
-void shake128(const int8_t *data, size_t len, uint8_t *tag, int d){
+void shake128(const uint8_t *data, size_t len, uint8_t *tag, int d){
     _sponge(data, len, tag, d, 0x1F, 168);
 }
-void sha3_224(const int8_t *data, size_t len, uint8_t *tag){
+/*! \brief SHA3-224 Hash Function 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные 224 бит
+ */
+void sha3_224(const uint8_t *data, size_t len, uint8_t *tag){
     _sponge(data, len, tag, 224/8, 0x06, 144);
 }
-void sha3_256(const int8_t *data, size_t len, uint8_t *tag){
+/*! \brief SHA3-256 Hash Function 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные 256 бит
+ */
+void sha3_256(const uint8_t *data, size_t len, uint8_t *tag){
     _sponge(data, len, tag, 256/8, 0x06, 136);
 }
-void sha3_512(const int8_t *data, size_t len, uint8_t *tag){
+/*! \brief SHA3-512 Hash Function 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные 512 бит
+ */
+void sha3_512(const uint8_t *data, size_t len, uint8_t *tag){
     _sponge(data, len, tag, 512/8, 0x06, 72);
 }
-void sha3_384(const int8_t *data, size_t len, uint8_t *tag){
+/*! \brief SHA3-384 Hash Function 
+    \param data - входные данные
+    \param len - длина входных данных в байтах
+    \param tag - выходные данные 384 бит
+ */
+void sha3_384(const uint8_t *data, size_t len, uint8_t *tag){
     _sponge(data, len, tag, 384/8, 0x06, 104);
 }
 
@@ -534,22 +478,38 @@ MESSAGE_DIGEST(MD_SHA3_512) {
 
 #include <stdio.h>
 static void print_hash(const char* title, uint8_t* tag, int len);
+
+/* Синтез алгоритма KECCAK-p[1600, 24]
+ C[x] = A[x, 0] ⊕ A[x, 1] ⊕ A[x, 2] ⊕ A[x, 3] ⊕ A[x, 4], x = 0…4;
+ D[x] = C[x — 1] ⊕ (С[x + 1] >>> 1), x = 0…4;
+ A[x, y] = A[x, y] ⊕ D[x],           x = 0…4, y = 0…4;
+ // cдвиг и транспонирование 5x5:
+ B[y, 2x + 3y] = A[x, y] >>> r[x, y], x = 0…4, y = 0…4;
+ A[x, y] = B[x, y] ⊕ (~B[x + 1, y] & B[x + 2, y]), x = 0…4, y = 0…4, 
+
+*/
 int main(int argc, char** argv)
 {
-    const int w = 64;// разрядность
+    const int w = 32;// разрядность
     int x=1, y=0, s;
+    printf("// theta:\n");
+    for (int x=0; x<5; x++)
+        printf("\tC[%d] = A0[%d] ^ A1[%d] ^ A2[%d] ^ A3[%d] ^ A4[%d];\n", x, x, x, x, x, x);
+    printf("\n");
+    for (int x=0; x<5; x++)
+        printf("\tD[%d] = C[%d] ^ ROTR(C[%x], 1);\n", x, (x-1+5)%5, (x+1)%5);
     printf("// rho:\n");
     for (int t=0; t<24; t++){
         s = -(t+1)*(t+2)/2;
         s = s % w;
         if (s<0) s+=w;
-        printf("\tB%d[%d] = ROTL(A%d[%d]^D[%d], %d);\n", y, x, y, x, x, 64-s);
+        printf("\tB%d[%d] = ROTR(A%d[%d]^D[%d], %d);\n", y, x, y, x, x, s);
         s = y;
         y = (2*x+3*y) % 5;
         x = s;
     }
     y =0, x=0, s=0;
-    printf("\tB%d[%d] = ROTL(A%d[%d]^D[%d], %d);\n", y, x, y, x, x, s);
+    printf("\tB%d[%d] = ROTR(A%d[%d]^D[%d], %d);\n", y, x, y, x, x, s);
     printf("// pi:\n");
 // A′[x, y, z]=A[(x + 3y) mod 5, x, z].
     for (int x=0; x<5; x++){
@@ -559,6 +519,10 @@ int main(int argc, char** argv)
         }
         printf("\n");
     }
+    for (int y=0; y<5; y++)
+    for (int x=0; x<5; x++)
+            printf("\tA%d[%d] = B%d[%d];\n", y, x, x, (3*y+x)%5);
+
 // A′[x, y,z] = A[x, y,z] ⊕ ((A[(x+1) mod 5, y, z] ⊕ 1) ⋅ A[(x+2) mod 5, y, z]).
     printf("// xi:\n");
     for (int y=0; y<5; y++){
@@ -575,60 +539,35 @@ int main(int argc, char** argv)
     KeccakF1600((uint64_t*)S, 24);
     unsigned tlen = 512;
     uint8_t tag[512];
-    shake256("", 0, tag, tlen); 
+    shake256((uint8_t*)"", 0, tag, tlen); 
+    print_hash("SHAKE256 XOF(512)", tag, tlen);
     // valid tag
     // 46 B9 DD ... 3E EB 24
     // 1F D1 66 ... E2 7F 2A
-    printf("SHAKE256 XOF(512):\n");
-    for (int i=0; i<tlen; i++) {
-        printf("%02X ", tag[i]);
-        if (i%16==15) printf("\n");
-    }
     printf("\n");
-    shake128("", 0, tag, tlen); 
+    shake128((uint8_t*)"", 0, tag, tlen); 
+    print_hash("SHAKE128 XOF(512)", tag, tlen);
     // valid 
     // 7F 9C 2B ... 05 85 3E
     // DD A2 52 ... 29 0B 6F
-    printf("SHAKE128 XOF(512):\n");
-    for (int i=0; i<tlen; i++) {
-        printf("%02X ", tag[i]);
-        if (i%16==15) printf("\n");
-    }
-    sha3_224("", 0, tag); 
-    printf("SHA3-224 Hash(0):\n");
-    for (int i=0; i<224/8; i++) {
-        printf("%02X ", tag[i]);
-        if (i%16==15) printf("\n");
-    }
-    printf("\n");
+    sha3_224((uint8_t*)"", 0, tag); 
+    print_hash("SHA3-224 Hash(0)", tag, 224/8);
 /* Hash val is
     6B 4E 03 42 36 67 DB B7 3B 6E 15 45 4F 0E B1 AB
     D4 59 7F 9A 1B 07 8E 3F 5B 5A 6B C7 */
-    sha3_256("", 0, tag); 
-    printf("SHA3-256 Hash(0):\n");
-    for (int i=0; i<256/8; i++) {
-        printf("%02X ", tag[i]);
-        if (i%16==15) printf("\n");
-    }
+    sha3_256((uint8_t*)"", 0, tag); 
+    print_hash("SHA3-256 Hash(0)", tag, 256/8);
 /* Hash val is
     A7 FF C6 F8 BF 1E D7 66 51 C1 47 56 A0 61 D6 62
     F5 80 FF 4D E4 3B 49 FA 82 D8 0A 4B 80 F8 43 4A */
-    sha3_384("", 0, tag); 
-    printf("SHA3-384 Hash(0):\n");
-    for (int i=0; i<384/8; i++) {
-        printf("%02X ", tag[i]);
-        if (i%16==15) printf("\n");
-    }
+    sha3_384((uint8_t*)"", 0, tag); 
+    print_hash("SHA3-384 Hash(0)", tag, 384/8);
 /* Hash val is
     0C 63 A7 5B 84 5E 4F 7D 01 10 7D 85 2E 4C 24 85
     C5 1A 50 AA AA 94 FC 61 99 5E 71 BB EE 98 3A 2A
     C3 71 38 31 26 4A DB 47 FB 6B D1 E0 58 D5 F0 04 */
-    sha3_512("", 0, tag); 
-    printf("SHA3-512 Hash(0):\n");
-    for (int i=0; i<512/8; i++) {
-        printf("%02X ", tag[i]);
-        if (i%16==15) printf("\n");
-    }
+    sha3_512((uint8_t*)"", 0, tag); 
+    print_hash("SHA3-512 Hash(0)", tag, 512/8);
 /* Hash val is
     A6 9F 73 CC A2 3A 9A C5 C8 B5 67 DC 18 5A 75 6E
     97 C9 82 16 4F E2 58 59 E0 D1 DC C1 47 5C 80 A6
@@ -645,6 +584,12 @@ int main(int argc, char** argv)
 /* Hash val is
     79 F3 8A DE C5 C2 03 07 A9 8E F7 6E 83 24 AF BF
     D4 6C FD 81 B2 2E 39 73 C6 5F A1 BD 9D E3 17 87 */
+    sha3_384(dataA3, 1600/8, tag); 
+    print_hash("SHA3-384 Hash(1600/8)", tag, 384/8);
+/* Hash val is
+    18 81 DE 2C A7 E4 1E F9 5D C4 73 2B 8F 5F 00 2B
+    18 9C C1 E4 2B 74 16 8E D1 73 26 49 CE 1D BC DD
+    76 19 7A 31 FD 55 EE 98 9F 2D 70 50 DD 47 3E 8F  */
     sha3_512(dataA3, 1600/8, tag); 
     print_hash("SHA3-512 Hash(1600/8)", tag, 512/8);
 /* Hash val is
