@@ -23,14 +23,17 @@ endif
 
 LIB = $(R3)/libr3_$(ARCH).a
 
-.PHONY: all clean
-all: gpg
+.PHONY: all clean cksum
+all: gpg cksum
 
 SRC = src/gpg_sign.c src/gpg_armor.c src/sign.c src/rsa.c src/gzip.c
-# SHA-1, SHA-256 (-u sha256), SHA3-224/256/384/512, BLAKE2s/b, Streebog-256/512, GOST R 34.11-94.
-# sha512.c (SHA-2-512) is not in the tree.
+# SHA-1, SHA-256 (-u sha256), SHA-384/512 и усечения из sha512.c, MD5,
+# SHA3-224/256/384/512, BLAKE2s/b, Streebog-256/512, GOST R 34.11-94.
+# SM3 в src/sm3.c не регистрируется: MESSAGE_DIGEST стоит под #if 0, в hmac.h нет MD_SM3.
 HASH_SRC = \
 	src/sha1.c \
+	src/sha512.c \
+	src/md5.c \
 	src/shake256.c \
 	src/blake2b.c \
 	src/blake2s.c \
@@ -40,5 +43,11 @@ HASH_SRC = \
 gpg: $(SRC) $(HASH_SRC) $(LIB)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(HASH_SRC) -Wl,-u,sha256 $(LIB) $(LDFLAGS) -lm -lz
 
+# Список файлов — src/Makefile-cksum. Демонстрационный main в r3_args.c не становится точкой входа.
+CKSUM_SRC = src/cksum.c src/crc16_clmul.c
+cksum: $(CKSUM_SRC) src/r3_args.c src/crc.h
+	$(CC) $(CFLAGS) -c -o src/r3_args.o src/r3_args.c -Dmain=r3_args_demo
+	$(CC) $(CFLAGS) -flax-vector-conversions -o $@ $(CKSUM_SRC) src/r3_args.o $(LDFLAGS)
+
 clean:
-	rm -f gpg
+	rm -f gpg cksum src/r3_args.o

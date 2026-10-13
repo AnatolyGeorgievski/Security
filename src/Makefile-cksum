@@ -1,0 +1,29 @@
+# PKG_CONFIG_PATH=C:\GTK\lib\pkgconfig
+# CC   = mingw32-gcc
+# CC = /usr/gcc/4.3/bin/gcc -m64
+# CC=gcc-4.1.2
+CFLAGS = -march=native -O3 -I./
+LDFLAGS= -s
+# -Wall -Werror
+# -g3
+# -lsocket
+
+SRC = r3_args.c cksum.c \
+	crc16_clmul.c
+
+OUTPUT=cksum
+INSTALL=cksum
+.PHONY: all clean
+
+all: $(OUTPUT)
+
+$(OUTPUT): $(SRC:.c=.o)
+	$(CC) $(LDFLAGS) -o $(OUTPUT) $^
+
+clean:
+	rm -f $(OUTPUT) $(SRC:.c=.o)
+
+# cp ../r2test/r3test $(INSTALL)/
+
+install: $(OUTPUT)
+	@mkdir -p $(INSTALL)

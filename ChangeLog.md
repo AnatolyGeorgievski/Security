@@ -5,6 +5,10 @@
 ## [2026-10-13]
 
 ### Added
+- В `gpg` добавлены `src/sha512.c` (SHA-384, SHA-512, SHA-512/224, SHA-512/256) и `src/md5.c` (MD5). SHA-256 по-прежнему тянется из R3-lib (`-Wl,-u,sha256`). SM3 не подключён: регистрация в `src/sm3.c` стоит под `#if 0`.
+- Сборка `cksum` по списку `src/Makefile-cksum`: `cksum.c`, `crc16_clmul.c`, `r3_args.c`, заголовок `src/crc.h`.
+- `src/blake2b.c` и `src/blake2s.c` — копии файлов, не симлинки. `src/ecc.h` и `src/crc.h` переведены в UTF-8.
+
 - `Makefile`: сборка `gpg` теми же ключами, что `godminer/src/netd_minimal.mak` (`-O3`, `-march=native` либо armv7/aarch64, `-ffast-math`, `-ftree-vectorize`, `-fPIC`, `-DGnuPG`).
 - `src/gpg_build.h`, `src/rsa.h`, `src/segment.h`.
 - `src/blake2b.c`, `src/blake2s.c` — ссылки на `R3-lib`, чтобы `#include "hmac.h"` был заголовком Security.

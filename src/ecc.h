@@ -3,28 +3,28 @@
 #define ECC_H
 #include "mp.h"
 
-/*! Представление точки EC в Якобинаских координатах */
+/*! РџСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ С‚РѕС‡РєРё EC РІ РЇРєРѕР±РёРЅР°СЃРєРёС… РєРѕРѕСЂРґРёРЅР°С‚Р°С… */
 typedef struct _ECC_Point ECC_Point;
 struct _ECC_Point {
     BNuint *x, *y, *z;
 };
-/*! Представление точки EC в Чудновских координатах */
+/*! РџСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ С‚РѕС‡РєРё EC РІ Р§СѓРґРЅРѕРІСЃРєРёС… РєРѕРѕСЂРґРёРЅР°С‚Р°С… */
 typedef struct _ECC_PointCh ECC_PointCh;
 struct _ECC_PointCh {
     BNuint *x, *y, *z, *z2, *z3;
 };
-/*! Представление точки EC в аффинных координатах */
+/*! РџСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ С‚РѕС‡РєРё EC РІ Р°С„С„РёРЅРЅС‹С… РєРѕРѕСЂРґРёРЅР°С‚Р°С… */
 typedef struct _ECC_PointA ECC_PointA;
 struct _ECC_PointA {
     BNuint *x, *y;
 };
-/*! Представление точки EC в проекционных координатах Монтгомери, */
+/*! РџСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ С‚РѕС‡РєРё EC РІ РїСЂРѕРµРєС†РёРѕРЅРЅС‹С… РєРѕРѕСЂРґРёРЅР°С‚Р°С… РњРѕРЅС‚РіРѕРјРµСЂРё, */
 typedef struct _ECC_PointM ECC_PointM;
 struct _ECC_PointM {
     BNuint *x, *z;
 };
-/*! Представление точки EC в расширенных координатах
-Используется для вычисления точек кривых Эдвардса
+/*! РџСЂРµРґСЃС‚Р°РІР»РµРЅРёРµ С‚РѕС‡РєРё EC РІ СЂР°СЃС€РёСЂРµРЅРЅС‹С… РєРѕРѕСЂРґРёРЅР°С‚Р°С…
+РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РґР»СЏ РІС‹С‡РёСЃР»РµРЅРёСЏ С‚РѕС‡РµРє РєСЂРёРІС‹С… Р­РґРІР°СЂРґСЃР°
 x = X/Z, y = Y/Z, x*y = T/Z
  */
 typedef struct _ECC_PointE ECC_PointE;
@@ -36,33 +36,33 @@ struct _ECC_PointE {
 #define FIX_BIT_LOG  2
 #define FIX_WINDOW   4
 #define FIX_OFFSET  (1<<FIX_WINDOW)
-#define FIX_SIZE    (FIX_OFFSET -1) // 2 таблицы по 15 точек 0 не храним
+#define FIX_SIZE    (FIX_OFFSET -1) // 2 С‚Р°Р±Р»РёС†С‹ РїРѕ 15 С‚РѕС‡РµРє 0 РЅРµ С…СЂР°РЅРёРј
 
 typedef struct _ECC_Curve ECC_Curve;
 struct _ECC_Curve {
     const char* name;
 //    int bn_size;
-    BNuint *a,*b;//,*p,*n; e,d - для кривой Эдвардса
+    BNuint *a,*b;//,*p,*n; e,d - РґР»СЏ РєСЂРёРІРѕР№ Р­РґРІР°СЂРґСЃР°
     MPCtx *ctx;
     MPCtx *ctq;
-    ECC_Point G;    // точка-генератор
-    ECC_Point P[1<<(NAF_WINDOW-2)];// расчитанные для метода NAF w<=4
-    ECC_Point F0[FIX_SIZE];// расчитанные для метода Fixed-base w=4
-    ECC_Point F1[FIX_SIZE];// расчитанные для метода Fixed-base w=4
-    ECC_Point F2[FIX_SIZE];// расчитанные для метода Fixed-base w=4
-    ECC_Point F3[FIX_SIZE];// расчитанные для метода Fixed-base w=4
+    ECC_Point G;    // С‚РѕС‡РєР°-РіРµРЅРµСЂР°С‚РѕСЂ
+    ECC_Point P[1<<(NAF_WINDOW-2)];// СЂР°СЃС‡РёС‚Р°РЅРЅС‹Рµ РґР»СЏ РјРµС‚РѕРґР° NAF w<=4
+    ECC_Point F0[FIX_SIZE];// СЂР°СЃС‡РёС‚Р°РЅРЅС‹Рµ РґР»СЏ РјРµС‚РѕРґР° Fixed-base w=4
+    ECC_Point F1[FIX_SIZE];// СЂР°СЃС‡РёС‚Р°РЅРЅС‹Рµ РґР»СЏ РјРµС‚РѕРґР° Fixed-base w=4
+    ECC_Point F2[FIX_SIZE];// СЂР°СЃС‡РёС‚Р°РЅРЅС‹Рµ РґР»СЏ РјРµС‚РѕРґР° Fixed-base w=4
+    ECC_Point F3[FIX_SIZE];// СЂР°СЃС‡РёС‚Р°РЅРЅС‹Рµ РґР»СЏ РјРµС‚РѕРґР° Fixed-base w=4
 };
 
 typedef struct _ECC_Params ECC_Params;
 struct _ECC_Params {
-  const char *name;             //!< текстовый идентификатор эллиптической кривой
-  int nbits;                    //!< число бит в prime
+  const char *name;             //!< С‚РµРєСЃС‚РѕРІС‹Р№ РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ СЌР»Р»РёРїС‚РёС‡РµСЃРєРѕР№ РєСЂРёРІРѕР№
+  int nbits;                    //!< С‡РёСЃР»Рѕ Р±РёС‚ РІ prime
   bool fips;                    //!< True if this is a FIPS140-2 approved curve
-//  bool minus3;                  //!< a=p-3 см a==NULL
-  MPReduction fast_reduction_p; //!< функция быстрого редуцирования по prime
-  MPReduction fast_reduction_n; //!< функция быстрого редуцирования по n
-  const char *p;                //!< простое число
-  const char *a, *b;            //!< W: y^2 = x^3 + a*x + b или
+//  bool minus3;                  //!< a=p-3 СЃРј a==NULL
+  MPReduction fast_reduction_p; //!< С„СѓРЅРєС†РёСЏ Р±С‹СЃС‚СЂРѕРіРѕ СЂРµРґСѓС†РёСЂРѕРІР°РЅРёСЏ РїРѕ prime
+  MPReduction fast_reduction_n; //!< С„СѓРЅРєС†РёСЏ Р±С‹СЃС‚СЂРѕРіРѕ СЂРµРґСѓС†РёСЂРѕРІР°РЅРёСЏ РїРѕ n
+  const char *p;                //!< РїСЂРѕСЃС‚РѕРµ С‡РёСЃР»Рѕ
+  const char *a, *b;            //!< W: y^2 = x^3 + a*x + b РёР»Рё
   //Edw: x^2+ay^2=1+bx^2y^2
   //M:   by^2 = x^3+ax^2+x
   const char *n;                //!< The order of the base point

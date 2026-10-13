@@ -120,7 +120,7 @@ static inline uint8x16_t REVERSE(uint8x16_t v) {
 //	return (v16qi)(v2du){(uint64_t)vrev64_u8((uint8x8_t) vgetq_lane_u64(t,1)), (uint64_t) vrev64_u8((uint8x8_t)vgetq_lane_u64(t,0))};
 }
 #else
-	#include <intrin.h>
+	#include <x86intrin.h>
 typedef uint64_t uint64x2_t __attribute__((__vector_size__(16)));
 typedef uint64_t poly64x4_t __attribute__((__vector_size__(32)));
 typedef uint64_t poly64x2_t __attribute__((__vector_size__(16)));

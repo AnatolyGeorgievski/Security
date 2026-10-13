@@ -132,6 +132,7 @@ int main(int argc, char *argv[])
 				break;
 			}
 
+		size_t file_len = length;
 		if (1) while (length){
 			crc = CRC32_update_4(crc, length& 0xFF);
 			length>>=8;
@@ -142,7 +143,7 @@ int main(int argc, char *argv[])
 //	printf("Test =%0X ..%s\n", crc^~0UL, (crc^~0UL)==CRC32B_CHECK?"ok":"fail");
 
             //char* base = basename(filename);
-		printf("%u %d %c%s\n", crc^CRC_xorout, (int)length, '*', filename);
+		printf("%u %d %c%s\n", crc^CRC_xorout, (int)file_len, '*', filename);
     }
     return 0;
 }
