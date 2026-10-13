@@ -13,7 +13,7 @@ OID: 1.2.643.2.2.35.1 id-GostR3410-2001-CryptoPro-A-ParamSet
 OID: 1.2.643.2.2.30.1 id-GostR3411-94-CryptoProParamSet
 
 
-    This file is distributed under GPL
+    This file is distributed under the MIT License. See the LICENSE file.
 /usr/gcc/4.3/bin/gcc -DDEBUG_GOST -o gost src/gosthash.c src/base64.c
 $ gcc -Os -s -DDEBUG_GOST -o gosthash.exe gosthash.c base64.c
 echo -n "8JaanTcVv6ndF8Xp/N011Lp46e68LjaUT9FhnEyQGs8=" | base64 -id | od -A n -X
