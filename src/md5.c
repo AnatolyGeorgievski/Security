@@ -1,6 +1,5 @@
 /*!
     MD5 Message-Digest Algorithm            April 1992
-не работает!
     \see http://tools.ietf.org/html/rfc1321
 
 MD5 test suite:

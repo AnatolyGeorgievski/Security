@@ -561,6 +561,14 @@ static void __attribute__((destructor)) digest_list_free(){
 	$ gcc -march=corei7 -O3 -s stribog.c sha.c sha512.c hmac.c gosthash.c md5.c -o hmac.exe -m32 -DTEST_HMAC
 	$./hmac.exe
  */
+static int n_skip, n_fail, n_pass;
+static const char *tally(int rc)
+{
+    if (rc < 0) { n_skip++; return "skip"; }
+    if (rc)     { n_fail++; return "fail"; }
+    n_pass++;
+    return "pass";
+}
 int main()
 {
     int i=0;
@@ -790,12 +798,16 @@ int main()
         for (i=0; i<80 && md_tests[i].msg; i++)
         {
             const MDigest *md = digest_select(md_tests[i].id);// MD_STRIBOG_256_digest;
-			if (md==NULL) continue;
+			if (md==NULL) {
+                printf("%d DIGEST id %d %s\n", i, md_tests[i].id, tally(-1));
+                continue;
+            }
             digest(md, hash, md->hash_len, (uint8_t*)md_tests[i].msg, strlen(md_tests[i].msg));
 //    for(i=0; i<8;i++) printf(" %016" PRIX64, ctx.H[i]); printf("\n");
-            if (memcmp(hash, md_tests[i].hash, md->hash_len)==0) printf("%d %s OK\n", i, md->name);
+            if (memcmp(hash, md_tests[i].hash, md->hash_len)==0)
+                printf("%d DIGEST %s %s\n", i, md->name, tally(0));
             else {
-                printf("%d %s Fail\n", i, md->name);
+                printf("%d DIGEST %s %s\n", i, md->name, tally(1));
                 printf("HASH:\n");
                 int n;
                 for (n=0; n<md->hash_len; n++){
@@ -1065,12 +1077,16 @@ int main()
         for (i=0; i<80 && hmac_tests[i].msg; i++)
         {
             const MDigest *md = digest_select(hmac_tests[i].id);// MD_STRIBOG_256_digest;
-			if (md==NULL) continue;
+			if (md==NULL) {
+                printf("%d HMAC id %d %s\n", i, hmac_tests[i].id, tally(-1));
+                continue;
+            }
             hmac(md, hash, md->hash_len, (uint8_t*)hmac_tests[i].msg, hmac_tests[i].mlen, (uint8_t*)hmac_tests[i].key, hmac_tests[i].klen);
 //    for(i=0; i<8;i++) printf(" %016" PRIX64, ctx.H[i]); printf("\n");
-            if (memcmp(hash, hmac_tests[i].hash, hmac_tests[i].hash_len)==0) printf("%d HMAC %s OK\n", i, md->name);
+            if (memcmp(hash, hmac_tests[i].hash, hmac_tests[i].hash_len)==0)
+                printf("%d HMAC %s %s\n", i, md->name, tally(0));
             else {
-                printf("%d HMAC %s Fail\n", i, md->name);
+                printf("%d HMAC %s %s\n", i, md->name, tally(1));
                 int n;
                 for (n=0; n<hmac_tests[i].klen; n++){
                     printf(" %02X", hmac_tests[i].key[hmac_tests[i].klen - n-1]);
@@ -1384,15 +1400,19 @@ int main()
         {
             //if (pbkdf2_tests[i].c> 4096) continue;
             const MDigest *md = digest_select(pbkdf2_tests[i].id);// MD_STRIBOG_256_digest;
-			if (md==NULL) continue;
+			if (md==NULL) {
+                printf("%d PBKDF2-HMAC id %d %s\n", i, pbkdf2_tests[i].id, tally(-1));
+                continue;
+            }
             pbkdf2_hmac(md, dk, pbkdf2_tests[i].dklen, (uint8_t*)pbkdf2_tests[i].pass, pbkdf2_tests[i].plen, (uint8_t*)pbkdf2_tests[i].salt, pbkdf2_tests[i].slen, pbkdf2_tests[i].c);
-            if (__builtin_memcmp(dk, pbkdf2_tests[i].dk,pbkdf2_tests[i].dklen)==0) printf("%d PBKDF2-HMAC %s OK\n", i, md->name);
+            if (__builtin_memcmp(dk, pbkdf2_tests[i].dk,pbkdf2_tests[i].dklen)==0)
+                printf("%d PBKDF2-HMAC %s %s\n", i, md->name, tally(0));
             else
             {
-                int i;
-                for (i=0; i<32; i++) printf("%02X ",dk[i]);
+                int n;
+                printf("%d PBKDF2-HMAC %s %s\n", i, md->name, tally(1));
+                for (n=0; n<32; n++) printf("%02X ",dk[n]);
                 printf("\n");
-                printf("%d Fail\n", i);
             }
         }
         /*    const MDigest *md = digest_select(MD_SHA1);
@@ -1429,9 +1449,16 @@ int main()
         for (i=0; i<1 && kdf256_tests[i].id; i++)
         {
             const MDigest *md = digest_select(kdf256_tests[i].id);// MD_STRIBOG_256;
+			if (md==NULL) {
+                printf("%d KDF256 id %d %s\n", i, kdf256_tests[i].id, tally(-1));
+                continue;
+            }
 			KDF256(md, dk, (uint8_t*)kdf256_tests[i].key, kdf256_tests[i].klen, (uint8_t*)kdf256_tests[i].label, kdf256_tests[i].llen,
 				(uint8_t*)kdf256_tests[i].seed, kdf256_tests[i].slen);
-			 if (__builtin_memcmp(dk, kdf256_tests[i].dk, kdf256_tests[i].dklen)==0) printf("%d KDF256 %s OK\n", i, md->name);
+			if (__builtin_memcmp(dk, kdf256_tests[i].dk, kdf256_tests[i].dklen)==0)
+                printf("%d KDF256 %s %s\n", i, md->name, tally(0));
+            else
+                printf("%d KDF256 %s %s\n", i, md->name, tally(1));
         }
     }
     if(1){//KDF256
@@ -1466,9 +1493,16 @@ int main()
         for (i=0; i<1 && kdf_tree_tests[i].id; i++)
         {
             const MDigest *md = digest_select(kdf_tree_tests[i].id);// MD_STRIBOG_256;
+			if (md==NULL) {
+                printf("%d KDF_TREE_256 id %d %s\n", i+1, kdf_tree_tests[i].id, tally(-1));
+                continue;
+            }
 			KDF_TREE(md, dk, (uint8_t*)kdf_tree_tests[i].key, kdf_tree_tests[i].klen, (uint8_t*)kdf_tree_tests[i].label, kdf_tree_tests[i].llen,
 				(uint8_t*)kdf_tree_tests[i].seed, kdf_tree_tests[i].slen, kdf_tree_tests[i].L, kdf_tree_tests[i].R);
-			 if (__builtin_memcmp(dk, kdf_tree_tests[i].dk, kdf_tree_tests[i].L/8)==0) printf("%d KDF_TREE_256 %s OK\n", i+1, md->name);
+			if (__builtin_memcmp(dk, kdf_tree_tests[i].dk, kdf_tree_tests[i].L/8)==0)
+                printf("%d KDF_TREE_256 %s %s\n", i+1, md->name, tally(0));
+            else
+                printf("%d KDF_TREE_256 %s %s\n", i+1, md->name, tally(1));
         }
     }
 	if (1) {// HKDF-Extract-Expand
@@ -1604,12 +1638,15 @@ int main()
         for (i=0; i<80 && hkdf_tests[i].Hash; i++)
         {
             const MDigest *md = digest_select(hkdf_tests[i].Hash);// MD_SHA256;
-			if (md==NULL) continue;
+			if (md==NULL) {
+                printf("%d HKDF-Extract id %d %s\n", i+1, hkdf_tests[i].Hash, tally(-1));
+                continue;
+            }
 			HKDF_Extract(md, prk, (uint8_t*)hkdf_tests[i].IKM, hkdf_tests[i].klen, (uint8_t*)hkdf_tests[i].salt, hkdf_tests[i].slen);
             if (__builtin_memcmp(prk, hkdf_tests[i].PRK, md->hash_len)==0) {
-                printf("%d HKDF-Extract %s OK\n", i+1, md->name);
+                printf("%d HKDF-Extract %s %s\n", i+1, md->name, tally(0));
             } else {
-                printf("%d HKDF-Extract %s FAIL\n", i+1, md->name);
+                printf("%d HKDF-Extract %s %s\n", i+1, md->name, tally(1));
                 int j;
                 for(j=0; j<md->hash_len; j++)
                     printf(" %02X", prk[j]);
@@ -1619,12 +1656,15 @@ int main()
         for (i=0; i<80 && hkdf_tests[i].Hash; i++)
         {
             const MDigest *md = digest_select(hkdf_tests[i].Hash);// MD_SHA256;
-			if (md==NULL) continue;
+			if (md==NULL) {
+                printf("%d HKDF-Expand id %d %s\n", i+1, hkdf_tests[i].Hash, tally(-1));
+                continue;
+            }
 			HKDF_Expand(md, (uint8_t*)hkdf_tests[i].PRK, okm, hkdf_tests[i].L, (uint8_t*)hkdf_tests[i].info, hkdf_tests[i].ilen);
             if (__builtin_memcmp(okm, hkdf_tests[i].OKM, hkdf_tests[i].L)==0) {
-                printf("%d HKDF-Expand %s OK\n", i+1, md->name);
+                printf("%d HKDF-Expand %s %s\n", i+1, md->name, tally(0));
             } else {
-                printf("%d HKDF-Expand %s FAIL\n", i+1, md->name);
+                printf("%d HKDF-Expand %s %s\n", i+1, md->name, tally(1));
                 int j;
                 for(j=0; j<md->hash_len; j++)
                     printf(" %02X", prk[j]);
@@ -1632,6 +1672,7 @@ int main()
             }
         }
 	}
-    return 0;
+    printf("skip %d fail %d pass %d\n", n_skip, n_fail, n_pass);
+    return n_fail ? 1 : 0;
 }
 #endif // TEST_HMAC

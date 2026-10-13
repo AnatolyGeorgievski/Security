@@ -23,7 +23,7 @@ endif
 
 LIB = $(R3)/libr3_$(ARCH).a
 
-.PHONY: all clean cksum
+.PHONY: all clean cksum hmac
 all: gpg cksum
 
 SRC = src/gpg_sign.c src/gpg_armor.c src/sign.c src/rsa.c src/gzip.c
@@ -50,4 +50,25 @@ cksum: $(CKSUM_SRC) src/r3_args.c src/crc.h
 	$(CC) $(CFLAGS) -flax-vector-conversions -o $@ $(CKSUM_SRC) src/r3_args.o $(LDFLAGS)
 
 clean:
-	rm -f gpg cksum src/r3_args.o
+	rm -f gpg cksum hmac src/r3_args.o src/gosthash.o
+
+# Отдельная цель: векторы из src/hmac.c (digest, HMAC, PBKDF2, KDF, HKDF).
+# SHA-224 берётся из src/sha.c. Там же свои SHA-1 и SHA-256, поэтому
+# sha1.c и -u,sha256 сюда не подключаются.
+# main в gosthash.c переименован, точкой входа остаётся hmac.c.
+HMAC_SRC = \
+	src/sha.c \
+	src/sha512.c \
+	src/md5.c \
+	src/shake256.c \
+	src/blake2b.c \
+	src/blake2s.c \
+	src/stribog.c \
+	$(R3)/src/r3_slist.c \
+	$(R3)/src/r3_slice.c
+
+HMAC_CFLAGS = $(filter-out -DGnuPG -include src/gpg_build.h,$(CFLAGS))
+
+hmac: src/hmac.c $(HMAC_SRC) src/gosthash.c
+	$(CC) $(HMAC_CFLAGS) -c -o src/gosthash.o src/gosthash.c -Dmain=gosthash_demo
+	$(CC) $(HMAC_CFLAGS) -DTEST_HMAC -o $@ src/hmac.c $(HMAC_SRC) src/gosthash.o $(LDFLAGS)
