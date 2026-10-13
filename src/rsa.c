@@ -571,7 +571,7 @@ static void pkcs_encode(const SignCtx *sign_ctx, uint8_t* em, int emlen, uint8_t
     case MD_SHA384: tag = hash_tag_sha384;  break;
     case MD_SHA512: tag = hash_tag_sha512;  break;
     case MD_SHA3_224: tag = hash_tag_sha3_224;  break;
-    case MD_SHA3_256: tag = hash_tag_sha3_356;  break;
+    case MD_SHA3_256: tag = hash_tag_sha3_256;  break;
     case MD_SHA3_384: tag = hash_tag_sha3_384;  break;
     case MD_SHA3_512: tag = hash_tag_sha3_512;  break;
     }

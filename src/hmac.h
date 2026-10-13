@@ -1,6 +1,7 @@
 #ifndef HMAC_H
 #define HMAC_H
 #include <inttypes.h>
+#include <stddef.h>
 typedef struct _MDCtx MDigest;
 struct _MDCtx {
     int id;
@@ -11,6 +12,7 @@ struct _MDCtx {
     void (*init  )(void* ctx);
     void (*update)(void* ctx, const void* msg, unsigned int mlen);
     void (*final )(void* ctx,       void* tag, unsigned int tlen);
+    void (*digest)(const uint8_t *msg, size_t mlen, uint8_t *tag);
 };
 
 enum {

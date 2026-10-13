@@ -836,8 +836,10 @@ void pgp_parse(struct _PGP_cert* pgp_cert, char* filename, uint8_t* contents, si
 //					case 0xE: digest_id = MD_SHA3_512; break;
 					}
 					const MDigest* md = digest_select(digest_id);
-					uint8_t hash[md->hash_len];//
-					if (md) {
+					uint8_t hash[64] = {0};
+					if (md == NULL) {
+						printf("hash alg %d не собран в этой утилите\n", gpg_header->hash_alg);
+					} else {
 						uint8_t aad[8];
 						void * ctx = pgp_digest_init(md);
 						switch(gpg_header->sign_type){

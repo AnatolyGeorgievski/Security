@@ -153,7 +153,7 @@ void UADD(v256 *r, const v256 *a)
     unsigned char cy = 0;
     for (i=0; i<4; i++)
     {//   register uint64_t t = (uint64_t)r->s[i] + a->s[i] + cy;
-        cy = _addcarry_u64(cy, r->d[i], a->d[i], &r->d[i]);
+        cy = _addcarry_u64(cy, r->d[i], a->d[i], (unsigned long long *)&r->d[i]);
     }
 }
 
@@ -760,9 +760,7 @@ static void gost94_init_CP(Gost94Ctx *ctx)
 static void __attribute__((constructor)) gost94_init_(){
     if (hash_params[1].ctx== NULL) {
         gost_ctx* gct = _aligned_malloc(sizeof(gost_ctx),16);
-        printf("%s: Init paramset\n", __FUNCTION__);
         gost_init(gct, hash_params[1].paramset);
-        printf("%s: Init paramset done\n", __FUNCTION__);
         hash_params[1].ctx = gct;
     }
 }

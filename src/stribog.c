@@ -625,7 +625,7 @@ void Add512(v2di *a, const v2di *b)
     int i;
 #pragma GCC unroll 8
     for (i=0; i<8; i++) {
-        cy = _addcarry_u64(cy, r[i], v[i], &r[i]);
+        cy = _addcarry_u64(cy, r[i], v[i], (unsigned long long *)&r[i]);
     }
 }
 static
