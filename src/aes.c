@@ -405,7 +405,7 @@ static void KeyExpansion(AES_Ctx * ctx, uint32_t* key, int klen, int ekb)
             ctx->K[i] = InvMixColumns4(ctx->K[i]);
     }
 }
-/*! AES-128 инверсия равернутого ключа для обратного преобразования
+/*! AES-128 инверсия развернутого ключа для обратного преобразования
     первый и последний ключи остаются без изменений, остальные инвертируются
  */
 void InvKeyExpansion(uint32_t *w, int Nk)

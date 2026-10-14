@@ -1,10 +1,15 @@
 /*! Национальый алгоритм блочного шифрования с длиной блока 64 бит. TC26 Магма
 
-	Copyright (c) 2015-2022 Anatoly Georgievskii <anatoly.georgievski@gmail.com>
+	Copyright (c) 2015-2022,2024 Anatoly Georgievskii <anatoly.georgievski@gmail.com>
 
 	\see ГОСТ Р 34.12-2015 Информационная технология. КРИПТОГРАФИЧЕСКАЯ ЗАЩИТА ИНФОРМАЦИИ. Блочные шифры
 	\see http://tc26.ru
 
+
+	\see Р 1323565.1.022—2018 Функции выработки производного ключа
+	\see Р 1323565.1.029—2019
+	\see Изменение № 1 Р 1323565.1.029-2019 «Информационная технология. Криптографическая защита информации. Протокол защищенного обмена для индустриальных систем»
+	\see Р 1323565.1.046—2023 (ProtoQa)
 
 
 Multilinear Galois Mode (MGM)
@@ -12,8 +17,13 @@ Multilinear Galois Mode (MGM)
 аутентифицированное шифрование
 	https://datatracker.ietf.org/doc/html/rfc9058
 	https://datatracker.ietf.org/doc/html/draft-smyshlyaev-mgm-20
+	[RFC8891] GOST R 34.12-2015: Block Cipher "Magma", Sep 2020
+	[RFC9058] <https://datatracker.ietf.org/doc/html/rfc9058> "Multilinear Galois Mode (MGM), June 2021"
 Отладка
 $ gcc -DTEST_MAGMA -march=native -o magma magma.c
+
+[RFC9215] Using GOST R 34.10-2012 and GOST R 34.11-2012 Algorithms with the Internet X.509 Public Key Infrastructure
+
 
  */
 #include <inttypes.h>
@@ -51,14 +61,65 @@ static const uint8_t sbox[8][16] = {
     UBFX -- Unsigned Bit Field Extract
     BFI  -- Bit Field Insert
 */
-#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+
+#include "net.h"
+ // выделить файл net.h
+#if 0
+#if !defined(__BYTE_ORDER__)
+
+#include <endian.h>
+#include <byteswap.h>
+#if defined(BYTE_ORDER) && (BYTE_ORDER == LITTLE_ENDIAN)
+static inline uint64_t ntohll(uint64_t a){
+    return __bswap_64(a);// LE
+}
+static inline uint64_t htonll(uint64_t a){
+    return __bswap_64(a);// LE
+}
+static inline uint32_t ntohl (uint32_t a){
+    return __bswap_32(a);// LE
+}
+static inline uint16_t htons (uint16_t a){
+    return __bswap_16(a);// LE
+}
+static inline uint16_t ntohs (uint16_t a){
+    return __bswap_16(a);// LE
+}
+#else
+static inline uint64_t ntohll(uint64_t a){
+    return (a);// BE
+}
+static inline uint64_t htonll(uint64_t a){
+    return (a);// BE
+}
+static inline uint32_t ntohl (uint32_t a){
+    return (a);// BE
+}
+static inline uint16_t htons (uint16_t a){
+    return (a);// BE
+}
+static inline uint16_t ntohs (uint16_t a){
+    return (a);// BE
+}
+#endif
+
+#elif defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+static inline uint64_t ntohll(uint64_t a){
+    return __builtin_bswap64(a);// LE
+}
 static inline uint64_t htonll(uint64_t a){
     return __builtin_bswap64(a);// LE
 }
 static inline uint32_t ntohl (uint32_t a){
     return __builtin_bswap32(a);// LE
 }
+static inline uint32_t htonl (uint32_t a){
+    return __builtin_bswap32(a);// LE
+}
 static inline uint16_t htons (uint16_t a){
+    return __builtin_bswap16(a);// LE
+}
+static inline uint16_t ntohs (uint16_t a){
     return __builtin_bswap16(a);// LE
 }
 #else
@@ -71,6 +132,10 @@ static inline uint32_t ntohl (uint32_t a){
 static inline uint16_t htons (uint16_t a){
     return (a);// BE
 }
+static inline uint16_t ntohs (uint16_t a){
+    return (a);// BE
+}
+#endif
 #endif
 //static inline
 uint32_t t(uint32_t a)
@@ -131,17 +196,6 @@ uint64_t magma_encrypt(const uint32_t *Key, uint64_t v){
 	} while(--count);
 	return (uint64_t)n1<<32 | n2;
 }
-#if 0
-uint64_t magma_decrypt(const uint32_t *K, uint64_t v){
-	uint32_t a0 = v, a1 = v>>32;
-	int i;
-	for (i=31; i>=0; i-=2){
-		a1 ^= g(K[i  ], a0);
-		a0 ^= g(K[i-1], a1);
-	}
-	return (uint64_t)a0<<32 | a1;
-}
-#else
 uint64_t magma_decrypt(const uint32_t *Key, uint64_t v){
 	uint32_t a0 = v, a1 = v>>32;
 	int count = 4;
@@ -158,7 +212,6 @@ uint64_t magma_decrypt(const uint32_t *Key, uint64_t v){
 	} while(--count);
 	return (uint64_t)a0<<32 | a1;
 }
-#endif // 0
 /*! \brief Режим выработки имитовставки
     \param K ключ шифрования длиной...
     \param iv начальное значение или вектор инициализации
@@ -212,28 +265,7 @@ static void magma_cmac_update(CCM_t *ctx, uint8_t* data, size_t len)
         }
     }
 }
-typedef  int64_t  int64x2_t __attribute__((__vector_size__(16)));
-typedef uint64_t poly64x2_t __attribute__((__vector_size__(16)));
-// Little Endian
-#define REV64(v) __builtin_bswap64(v)
-/*! brief операция умножения с накоплением без редуцирования в результате получаем 128 бит */
-static inline void CL_MLA64(poly64x2_t *s, uint64_t p, uint64_t v) {
-	(*s) ^= (poly64x2_t)__builtin_ia32_pclmulqdq128((int64x2_t){p},(int64x2_t){v}, 0x00);
-}
-static uint64_t gf64_reduction(poly64x2_t s)
-{
-#if defined(__PCLMUL__)// Intel PCLMUL
-	poly64x2_t t = (poly64x2_t)__builtin_ia32_pclmulqdq128((int64x2_t)s, (int64x2_t){0x145ULL,0x1BULL}, 0x11) ^ s;
-	s ^=  (poly64x2_t)__builtin_ia32_pclmulqdq128((int64x2_t)t, (int64x2_t){0x145ULL,0x1BULL}, 0x11);// todo уточнить коэффициенты
-	return s[0];
-#else
-	uint64_t x1 = s[1];
-	uint64_t x0 = s[0];
-	x1 = x1 ^ x1>>63 ^ x1>>61 ^ x1>>60;
-	x1 = x1 ^ x1<<3;
-	return x0 ^ x1 ^ x1<<1;// ^ x1<<3 ^ x1<<4;
-#endif
-}
+
 /*! таблица для редуцирования после умножения
 	перенос (4бита) по таблице добавить к остатку
 */
@@ -243,51 +275,16 @@ static const uint8_t gf2m_64[] = {
 0xD8, 0xC3, 0xEE, 0xF5,
 0xB4, 0xAF, 0x82, 0x99,
 };
-/*! \brief Умножение 64х64 в поле GF(2^64) с полиномом по четыре бита без редуцирования */
-static uint64_t gf64_mulm   (uint64_t a, uint64_t b)
+static inline uint64_t gf64_shift(uint64_t a)
 {
 	const uint64_t P = 0x1BULL;
-	int i,n;
-	uint64_t aa[16];// таблица умножения 128 байт, 16 элементов
-	// расчитать таблицу умножения для 16 значений
-	for (n=0; n<16;n++) aa[n] = 0;
-	for (i=0; i<4; i++){
-		for (n=0; n<16; n++)
-			if (n & (1<<i)) aa[n] ^= a;
-		if (a&(1ULL<<63))
-			a = (a<<1) ^ P;
-		else
-			a = (a<<1);
-	}
-	uint64_t r = 0;
-	for (i=15; i>=0; i--){
-		r = (r<<4) ^ gf2m_64[r>>60] ^ aa[(b>>(4*i))&0xF];// умножение и редуцирование
-	}
-	return r;
+//	if (__builtin_uaddll_overflow(a,a,&a)) a^=P;
+	if (a>>63)
+		a = (a<<1) ^ P;
+	else
+		a = (a<<1);
+	return a;
 }
-static
-void CL_MLA64_(poly64x2_t *s, uint64_t a, uint64_t b) {
-	const uint64_t P = 0x1BULL;
-	int i,n;
-	uint64_t aa[16];// таблица умножения 128 байт, 16 элементов
-	// расчитать таблицу умножения для 16 значений
-	for (n=0; n<16;n++) aa[n] = 0;
-	for (i=0; i<4; i++){
-		for (n=0; n<16; n++)
-			if (n & (1<<i)) aa[n] ^= a;
-		if (a&(1ULL<<63))
-			a = (a<<1) ^ P;
-		else
-			a = (a<<1);
-	}
-	uint64_t r = 0, cy=0;
-	for (i=15; i>=0; i--){
-		cy = (cy<<4)|(r>>60);
-		r = (r<<4) ^ aa[(b>>(4*i))&0xF];
-	}
-	(*s)^=(poly64x2_t){r,cy};
-}
-
 static inline uint64_t incr_l(uint64_t v64) {
 	union {
 		uint32_t u32[2];
@@ -310,7 +307,7 @@ static void print_hex(const char* fmt, int i, uint64_t v)
 {
 	printf(fmt, i);
 	for (i=0; i<8;i++)
-		printf(" %02llX", 0xFF&(v>>((7-i)*8)));
+		printf(" %02X", (unsigned int)(0xFF&(v>>((7-i)*8))));
 	printf("\n");
 }
 typedef uint64_t (*CipherEncrypt64)(const uint32_t *Key, uint64_t v);
@@ -321,16 +318,12 @@ struct _XTS64 {
 	uint32_t * key1;
 	uint32_t * key2;
 };
-static inline uint64_t gf64_shift(uint64_t a)
-{
-	const uint64_t P = 0x1BULL;
-	if (a>>63)
-		a = (a<<1) ^ P;
-	else
-		a = (a<<1);
-	return a;
-}
-// синтезировал алгоритм для шифрования на носителе
+/* синтезировал алгоритм для шифрования на носителе
+    \see DEC - алгоритм повторяющий CTR, только в IV записывается номер сектора и номер раздела, так чтобы не перекрывались.
+    В DEC вводится ограничение, на каждом разделе и секторе свой ключ. Нужна фукнция выработки производных ключей на основе CMAC()
+    Ключ сектора вырабатывается на основе ключа раздела по методу
+
+ */
 void XTS64_encrypt(XTS_t *xex, uint8_t* dst, const uint8_t* src, int length)
 {
 	CipherEncrypt64 encrypt = xex->encrypt;
@@ -361,127 +354,21 @@ void XTS64_encrypt(XTS_t *xex, uint8_t* dst, const uint8_t* src, int length)
 		*(uint64_t*)dst = d;
 	}
 }
-typedef struct _MGM MGM_t;
-struct _MGM {
-    uint64_t icn;
-    uint32_t *K;
-};
-/*! \brief Режим гаммирования, отличается инициализация счетчика
-	\see https://datatracker.ietf.org/doc/html/draft-smyshlyaev-mgm-20
-
-	Этот вариант пригоден для шифрования носителя
-*/
-void magma_mgm_enc(MGM_t *ctx, uint8_t* ct, const uint8_t* pt, uint32_t len)
-{
-    const unsigned int s=8;
-	uint64_t h,c;
-	union {
-        uint32_t u[2];
-        uint64_t u64;
-	} ctr;
-	ctr.u64 =  magma_encrypt(ctx->K, ctx->icn & ~(0x1ULL<<63));
-	int i;
-    int blocks = len/s;
-	for (i=0; i<blocks; i++){
-		__builtin_memcpy(&c, &pt[8*i], s);
-		h = magma_encrypt(ctx->K, ctr.u64);
-		if (0) {
-			print_hex("Y_%d    : ", i+1, ctr.u64);
-			print_hex("E_K(Y_2): ", i+1, h);
-		}
-		c^= REV64(h);
-		__builtin_memcpy(&ct[8*i], &c, s);
-		ctr.u[0]++;
-	}
-	int r = len%s;
-	if (r){
-		__builtin_memcpy(&c, &pt[8*i], r);
-		h = magma_encrypt(ctx->K, ctr.u64);
-		c^= REV64(h>>(8*(8-s)));
-		__builtin_memcpy(&ct[8*i], &c, r);
-	}
-}
-/*! \brief MGM Tag Generation Procedure
-
-вычисление тега аутентификации в режиме MGM
-	\param ctx context
-	\param[IN] aad Associated authenticated data A
-	\param aad_len Associated authenticated data length
-	\param[IN] ct Cipher text Encrypted payload
-	\param len Cipher text length
-	\return Tag
- */
-uint64_t magma_mgm_tag(MGM_t *ctx, const uint8_t* aad, uint32_t aad_len, const uint8_t* ct, uint32_t len)
-{
-	const unsigned int s = 8;// длина блока
-	poly64x2_t sum = {0};
-		union {
-        uint32_t u[2];
-        uint64_t u64;
-	} ctr;
-	uint64_t h, c;
-	ctr.u64 = magma_encrypt(ctx->K, ctx->icn|(0x1ULL<<63));
-	int i;
-// magma_mgm_tag_update(ctx, data, len);
-	int blocks = aad_len/s;
-	for (i=0; i<blocks; i++){
-		h = magma_encrypt(ctx->K, ctr.u64);
-		c = htonll(*(uint64_t*)aad); aad+=8;
-		CL_MLA64(&sum, c, h);// sum = sum (xor) ( H_i (x) A_i )
-		ctr.u[1]++;
-		if (0) {
-			print_hex("Z_%d  : ", i+1, ctr.u64);
-			print_hex("H_%d  : ", i+1, h);
-			print_hex("sum_%d: ", i+1, gf64_reduction(sum));
-		}
-	}
-    if (aad_len % s) {
-		h = magma_encrypt(ctx->K, ctr.u64);
-		if (0) {
-			print_hex("Z_%d     : ", i+1, ctr.u64);
-			print_hex("H_%d  : ", i+1, h);
-		}
-		c = 0;
-		__builtin_memcpy(&c, aad, aad_len % s);
-		CL_MLA64(&sum, htonll(c), h);
-		ctr.u[1]++;
-	}
-// magma_mgm_tag_update(ctx, data, len);
-	blocks = len/s;
-	for (i=0; i<blocks; i++){
-		h = magma_encrypt(ctx->K, ctr.u64);
-		c = htonll(*(uint64_t*)ct); ct+=8;
-		CL_MLA64(&sum, (c), h);// sum = sum (xor) ( H_i (x) C_i )
-		ctr.u[1]++;
-	}
-    if (len % s) {
-		h = magma_encrypt(ctx->K, ctr.u64);
-		c = 0;
-		__builtin_memcpy(&c, ct, len % s);
-		CL_MLA64(&sum, htonll(c), h);
-		ctr.u[1]++;
-	}
-	h = magma_encrypt(ctx->K, ctr.u64);
-	ctr.u[0] =     len*s;
-	ctr.u[1] = aad_len*s;
-	CL_MLA64(&sum, ctr.u64, h);
-	return magma_encrypt(ctx->K, gf64_reduction(sum));
-	// Return (ICN, A, C, T)
-}
 
 static uint64_t magma_cmac_fini(CCM_t *ctx)
 {
     const int s=8;
 	uint64_t K1 = magma_encrypt(ctx->K, 0ULL);
-	int of = K1>>63;
-	//printf("R = %016"PRIx64"\n", K1);
+	K1 = gf64_shift(K1);
+/*	int of = K1>>63;
 	K1=(K1<<1);
-	if(of) K1^=0x1BULL;// RED BULL
+	if(of) K1^=0x1BULL;// RED BULL */
 	//printf("K1= %016"PRIx64"\n", K1);
 	if (ctx->len%s) {// не полный блок
-		of = K1>>63;
+		K1 = gf64_shift(K1);
+/*		of = K1>>63;
 		K1=(K1<<1);
-		if(of) K1^=0x1BULL;
+		if(of) K1^=0x1BULL; */
         //printf("K2= %016"PRIx64"\n", K1);
 		/// добить нулями и 10000, и единицей
 		//ctx->last_block <<= (s - (ctx->len%s))*8;
@@ -541,17 +428,20 @@ void magma_ACPKM(uint32_t *K)
 	uint8_t *dst = (uint8_t *)(k+8);
 	int i;
 	for (i=0; i<4; i++) {
-		uint64_t v = __builtin_bswap64(*(uint64_t*) src); src+=8;
+		uint64_t v = ntohll(*(uint64_t*) src); src+=8;
 		v = magma_encrypt(K, v);
 		dst-=8;
 		*(uint64_t*) dst = (v);
 	}
 	__builtin_memcpy(K, k, 32);
+	__builtin_bzero (k, 32);
 }
-/*! \brief Режим гаммирования с кручением ключа */
+/*! \brief Режим гаммирования с кручением ключа
+           Режим гаммирования с преобразованием ключа
+*/
 void magma_ctr_acpkm(uint32_t *K, uint32_t iv, uint8_t* data, size_t len)
 {
-    const int n=2;// частота смены ключа
+    const int n=2;// частота смены ключа, вынести в контекст
     const int s=8;
 	uint64_t m,v;
 	union {
@@ -614,15 +504,21 @@ void magma_KExp15(uint8_t* data, int klen,
 	MagmaCtx ctx;
 	magma_ekb(ctx.K, key_exp_mac, 32, 0);
 	uint64_t keymac = magma_cmac(ctx.K, iv, iv_len, data, klen);
-//	printf("KEYMAC %016llX\n", keymac);// 75A76618E90F4973
+	if (0)printf("KEYMAC %016lX\n", keymac);// 75A76618E90F4973
 	magma_ekb(ctx.K, key_exp_enc, 32, 0);
-	*(uint64_t* )(data+klen) = __builtin_bswap64(keymac);
-	magma_ctr(ctx.K, __builtin_bswap32(*(uint32_t*)iv), data, klen+8);
+	*(uint64_t* )(data+klen) = ntohll(keymac);
+	magma_ctr(ctx.K, ntohl(*(uint32_t*)iv), data, klen+8);
 }
 /*! \brief Алгоритм импорта ключа KImp15
 	\return TRUE если иммитовставка от ключа OMAC сходится.
 
 	\see Р 1323565.1.017—2018  KExp15 KImp15
+
+Для получения ключей 𝐾𝑀𝐴𝐶 𝐸𝑥𝑝 и 𝐾𝐸𝑁𝐶 𝐸𝑥𝑝, помимо KeyWrapID,
+допускается использование заранее распределенного ключа
+между СКЗИ-потребителем и узлом СВРК. KeyWrapID-  8байт.
+    \see МР 26.4.004–2021
+
  */
 int magma_KImp15(uint8_t* data, int klen,
 	uint8_t* key_exp_mac, uint8_t* key_exp_enc, uint8_t* iv)
@@ -630,28 +526,22 @@ int magma_KImp15(uint8_t* data, int klen,
 	const int iv_len = 4;
 	MagmaCtx ctx;
 	magma_ekb(ctx.K, key_exp_enc, 32, 0);
-	magma_ctr(ctx.K, __builtin_bswap32(*(uint32_t*)iv), data, klen+8);
+	magma_ctr(ctx.K, ntohl(*(uint32_t*)iv), data, klen+8);
 	magma_ekb(ctx.K, key_exp_mac, 32, 0);
 	uint64_t keymac = magma_cmac(ctx.K, iv, iv_len, data, klen);
-	return __builtin_bswap64(keymac)==*(uint64_t* )(data+klen);
+	return htonll(keymac)==*(uint64_t* )(data+klen);
 }
 
-#ifdef TEST_MAGMA
-#include <stdio.h>
+// 5.3 Выработка производного ключевого материала
+
+#include "crisp.h"
+#include <stdlib.h>
 
 #define MAGMA_CTR_CMAC 		1
 #define MAGMA_NULL_CMAC 	2
 #define MAGMA_CTR_CMAC8 	3
 #define MAGMA_NULL_CMAC8 	4
 
-struct _crisp_ctx {
-//    uint16_t version;
-    uint8_t CS;		//!< режим шифрования 01: MAGMA-CTR-CMAC 02: MAGMA-NULL-CMAC 03:
-    uint8_t *KeyId;
-    uint8_t klen;
-    uint8_t *K;		//!< Базовый ключ
-    uint8_t* SourceIdentifier;
-};
 /*! \brief Выработка производных ключей
     \param K производный ключ
     \param Key базовый ключ
@@ -660,7 +550,7 @@ struct _crisp_ctx {
 		\arg  02 MAGMA-NULL-CMAC
 		\arg  03 MAGMA_CTR_CMAC8
 		\arg  04 MAGMA_NULL_CMAC8
-    \param SeqNum последовательный номер обмена
+    \param SeqNum последовательный номер обмена 48 бит
     \param SourceIdentifier идентификатор отправителя
     \param slen длина идентификатора от 4.. байт
 */
@@ -668,7 +558,7 @@ uint8_t * crisp_key_derive(uint8_t* K, const uint32_t* Key, uint8_t CS, uint64_t
 {
     uint8_t  iv[18+slen];
     uint8_t* buf = iv;
-	int count;
+	int count;// объем ключевого материала count*64
     switch (CS){
     case 0x04:
     case 0x02:
@@ -681,66 +571,246 @@ uint8_t * crisp_key_derive(uint8_t* K, const uint32_t* Key, uint8_t CS, uint64_t
     __builtin_memcpy(buf, (CS&1)?"\x00macenc\x06":"\x00macmac\x06", 8);
     buf+=8;
     uint64_t SN = /* __builtin_bswap64 */((SeqNum>>(48-35)) & ((1ULL<<35)-1));//>>13 48бит 35 бит
-    printf("SN = %010"PRIX64"\n", SN);
+    if(0) printf("SN = %010"PRIX64"\n", SN);
     *buf++ = SN>>(32);
     *buf++ = SN>>(24);
     *buf++ = SN>>(16);
     *buf++ = SN>>( 8);
     *buf++ = SN;
-    __builtin_memcpy(buf, SourceIdentifier, slen);// 22-24 бита
+    if (slen>0) __builtin_memcpy(buf, SourceIdentifier, slen);// 22-24 бита
     buf+=slen;
     *buf++ = CS;
     *(uint16_t*)buf = htons(slen+6); buf+=2;//сумма байтовых длин значений SN, SourceIdentifier, CS
     *(uint16_t*)buf = htons(count<<6); buf+=2;// число бит в производном ключе
-    int i;
-/*	for (i=0; i<18+slen; i++) {
-        printf("%02"PRIx8" ", iv[i]);
-        if ((i&15)==15) printf("\n");
-	}
-	printf("\n"); */
-    for (i=0; i<count; i++){
+
+    for (int i=0; i<count; i++){
         iv[0]++;// от 1...n
         *(uint64_t*)K = htonll(magma_cmac(Key, 0, 0,  iv, slen+18));
         K+=8;
     }
     return NULL;
 }
+/*! \brief формирует KeyId для протокола */
+int crisp_key_id(uint8_t* key_id, const uint8_t* s_id, const uint8_t* r_id, uint16_t id_mk, uint32_t j, uint32_t t)
+{
+	uint8_t* s = key_id;
+	*s++ = 0xA8;
+	__builtin_memcpy(s, s_id, 16); s+=16;
+	__builtin_memcpy(s, r_id, 16); s+=16;
+	uint64_t KeyCounter = (uint64_t)id_mk<<48;
+		KeyCounter |= (uint64_t)(j&0xFFFFFFuL)<<24;
+		KeyCounter |= (uint64_t)(t&0xFFFFFFuL)<< 0;
+	*(uint64_t*)s = htonll(KeyCounter); s+=8;
+	return s - key_id;
+}
+/*! \brief формирует метку для выработки ключа */
+int _label (uint8_t*  label, const uint8_t* name, const uint8_t* sender_id, const uint8_t* recipient_id, uint16_t id_mk){
+	uint8_t* s = label;
+	*s++ = name[0];
+	*s++ = name[1];
+	__builtin_memcpy(s, sender_id, 16); s+=16;
+	__builtin_memcpy(s, recipient_id, 16); s+=16;
+	*s++ = (id_mk>>8)&0xFF;
+	*s++ = (id_mk   )&0xFF;
+	return s - label;
+}
+/*! \brief KDF_TREE_CMAC 
+	\param label  (name| SenderID| RecipientID | ID_MK | j | t) name = "cr" для протокола или "qk" для обмена ключами ID_MK - два байта
+	\param seed 0
+ */
+int _kdf_tree_cmac(uint8_t* dk, const uint32_t* Key, const uint8_t* label, int llen, uint32_t t, uint32_t seed, int R)
+{
+	int count = 8;
+	uint8_t iv[64];
+	uint8_t* buf = iv;
+	*(uint32_t*)buf = 0;// номер ключа
+	buf+=4;
+	__builtin_memcpy(buf, label/*"macenc"*/, llen);
+	buf+=llen;
+	*buf++ = 0x00;
+	*(uint32_t*)buf = htonl(seed); buf+=4;
+	*(uint16_t*)buf = htons(count<<6);
+	
+    for (int i=0; i<count; i++){
+        *(uint32_t*)iv = htonl(++t);// от 1...n
+        *(uint64_t*)dk = htonll(magma_cmac(Key, 0, 0,  iv, llen+11));
+        dk+=8;
+    }
+	return 8*count;
+}
+static
 int crisp_header(uint8_t * buf, uint8_t CS, uint64_t SeqNum,  uint8_t *KeyId, int klen)
 {
-	*buf++ = 0x80;
-	*buf++ = 0x00;
-	*buf++ = CS;
+	*buf++ = 0x00;	// ExternalKeyIdFlag:1
+	*buf++ = 0x00;	// Version
+	*buf++ = CS;	// 
 	if (klen>1) {
 		*buf++ = (klen|0x80);
 		__builtin_memcpy(buf, KeyId, klen);
 		buf+= klen;
-	} else
+	} else {
 		*buf++ = KeyId[0];
+		klen = 0;
+	}
+	// упаковка Big Endian 48 бит
 	*buf++ = SeqNum>>40;
 	*buf++ = SeqNum>>32;
 	*buf++ = SeqNum>>24;
 	*buf++ = SeqNum>>16;
-	*buf++ = SeqNum>>8;
-	*buf++ = SeqNum>>0;
-	return klen+9;
+	*buf++ = SeqNum>> 8;
+	*buf++ = SeqNum>> 0;
+	return klen+10;
 }
-/*! \brief выполнить кодирование данных и расчет
-	\param CS режим шифрования
+/*! \brief выполнить кодирование данных
+
+	Кодирование выполняется на том же буфере
+	
+	\param CS режим шифрования, если число нечетное, то используется шифрование. 
  */
-uint64_t crisp_encode(uint8_t* K, uint8_t CS, uint32_t iv, uint8_t* hdr, int hlen, uint8_t* data, int dlen)
+int crisp_encode(CRISP_t* ctx, uint8_t* data, int dlen)
 {
+	uint64_t SeqNum = ctx->seq_max++ & 0xFFFFFF;
+
+	int hlen = crisp_header(ctx->buffer, ctx->CS, SeqNum, ctx->KeyId, ctx->klen);
     uint32_t key[8];
-	uint8_t *k_mac;
-	if (CS&1) {
-		uint8_t *k_enc = K;
+	uint8_t K[64];// производный ключ
+	crisp_key_derive(K, ctx->K, ctx->CS, SeqNum, ctx->SourceIdentifier, ctx->slen);
+	if (ctx->buffer+hlen != data) {
+		__builtin_memcpy(ctx->buffer+hlen, data, dlen);
+		data = ctx->buffer+hlen;
+	}
+	if (ctx->CS&1) {
+		uint8_t *k_enc = K+32;// Ключ шифрования
 		magma_ekb(key, k_enc, 32, 0);
-		magma_ctr(key, iv, data, dlen);
-		k_mac = K+32;
-	} else
-		k_mac = K;
-	magma_ekb(key, k_mac, 32, 0);
-    return magma_cmac(key, hdr, hlen, data, dlen);
+		magma_ctr(key, SeqNum, data, dlen);
+	}
+	if (ctx->CS!=0) {
+		uint8_t *k_mac = K;
+		magma_ekb(key, k_mac, 32, 0);
+		uint64_t icv = magma_cmac(key, ctx->buffer, hlen, data, dlen);
+		if (ctx->CS>2){// mac_len
+			*(uint64_t*)(data+dlen) = htonll(icv);
+			dlen+=8;
+		} else {
+			*(uint32_t*)(data+dlen) = htonl(icv>>32);
+			dlen+=4;
+		}
+	}
+	return hlen+dlen;
 }
+
+static inline int _in_winodw(CRISP_t* ctx, uint64_t SeqNum){
+	return SeqNum<=ctx->seq_max && ctx->seq_min<=SeqNum;
+}
+/*! \brief Пороцедура восстановления CRISP сообщения	
+	\see 6.3 Восстановление исходного сообщения получателем	
+ */ 
+int crisp_decode(CRISP_t* ctx, uint8_t * data, int dlen)
+{
+	uint8_t* hdr = data;
+	int external_key_flag = data[0]>>7;
+	uint16_t version = ntohs(*(uint16_t*)data)&0x7FFFu; data+=2;
+	uint8_t  CS = *data++;
+	uint8_t  key_id = *data++;
+	if (key_id & 0x80){
+		int key_id_len = key_id & 0x7F;
+		data += key_id_len;
+	} else {// короткий идентификатор ключа
+		
+	}
+	uint64_t SeqNum = 
+		((uint64_t)data[0]<<40)| 
+		((uint64_t)data[1]<<32)|
+		((uint64_t)data[2]<<24)|
+		((uint64_t)data[3]<<16)|
+		((uint64_t)data[4]<< 8)|
+		((uint64_t)data[5]<< 0);
+	data+=6;
+	if (version!=0) return -1;// не поддерживается
+	if (ctx->seq_min>SeqNum) return -1;// Недопустимое значение 
+	int offset = (SeqNum - ctx->seq_min);// проверить на переполнение
+	if ((offset<=ctx->seq_max) && 
+		(ctx->recvd[offset>>5]&(1U<<(offset&0x1F)))){
+		return -1;// сообщение уже обработано
+	}
+	uint8_t K[64];
+	uint32_t key[32];//развернутый ключ
+	crisp_key_derive(K, ctx->K, CS, SeqNum, ctx->SourceIdentifier, ctx->slen);
+	uint8_t*  k_enc = K+32;
+	printf("key_enc = ");
+	for(int i=0;i<32;i++) printf(" %02X", k_enc[i]);
+	printf(";\n");
+	uint8_t*  k_mac = K;
+	magma_ekb(key, k_mac, 32, 0);
+	int hlen = data-hdr;//  ctx->klen+10
+	dlen -= hlen+4;
+    uint64_t icv =  magma_cmac(key, hdr, hlen, data, dlen);
+	printf("hlen =%d, dlen = %d, icv = %08lx;\n", hlen, dlen, icv);
+	if (ctx->CS>2){
+		if (*(uint64_t*)(data+dlen) != htonll(icv)) return -1;// не сходится
+	} else {
+		if (*(uint32_t*)(data+dlen) != htonl(icv>>32)) return -1;// не сходится
+	}
+	if (_in_winodw(ctx, SeqNum))
+	if (SeqNum > ctx->seq_max) {
+		// очистить ряд
+		ctx->seq_max = SeqNum;
+		ctx->seq_min = SeqNum - CRISP_WINDOW +1;
+		if (ctx->seq_min<0) ctx->seq_min = 0;
+	}
+	offset = SeqNum % CRISP_WINDOW;
+	ctx->recvd[offset>>5] |= 1U<<(offset&0x1F);
+	if(CS&1){// если предусмотрено шифрование
+		magma_ekb(key, k_enc, 32, 0);
+		magma_ctr(key, (uint32_t)SeqNum, data, dlen);
+	}
+	return hlen;
+}
+/*! 
+	\param CS - криптонабор 
+		01: MAGMA-CTR-CMAC 02: MAGMA-NULL-CMAC 03: MAGMA-CTR-CMAC8 04: MAGMA-NULL-CMAC8
+ */
+CRISP_t* crisp_init(CRISP_t* ctx)
+{
+	if (ctx==NULL) {
+		ctx = malloc(sizeof(CRISP_t));
+		ctx->buffer = NULL;
+		ctx->hdl = NULL;
+	}
+	ctx->CS = 0;
+	ctx->hlen = 0;
+	for (int i=0; i<CRISP_WINDOW/32; i++) ctx->recvd[i]=0;
+	ctx->seq_max = ctx->seq_min = 0;
+	ctx->hdl = NULL;
+	ctx->buffer = malloc(2048);// MTU
+	ctx->K = malloc(sizeof(uint32_t)*32);
+	return ctx;
+}
+static
+void reverse(uint8_t* data, unsigned int len){
+	for (int i=0; i< len/16; i++) {
+		uint64_t v1 = *(uint64_t*)&data[i*8];
+		uint64_t v2 = *(uint64_t*)&data[len - (i+1)*8];
+		*(uint64_t*)&data[i*8] = __builtin_bswap64(v2);
+		*(uint64_t*)&data[len - (i+1)*8] = __builtin_bswap64(v1);
+	}
+}
+
+/* привзяка ключа шифрования */
+int crisp_set_key(CRISP_t* ctx, uint8_t CS, uint8_t* key, int klen, uint8_t* key_id, int key_id_len, char* source_id, int slen)
+{
+	ctx->CS    = CS;
+	ctx->KeyId = key_id;
+	ctx->klen  = key_id_len;
+	ctx->hlen  = key_id_len+10;
+	ctx->slen  = slen;// strlen(source_id);
+	magma_ekb(ctx->K, key, klen, 0);
+	ctx->SourceIdentifier = source_id;// источник данных, публикует по данной теме
+	return 0;
+}
+#ifdef TEST_MAGMA
+#include <stdio.h>
+
 static void print_hexstr(const char* fmt, const uint8_t* v, size_t len)
 {
 	printf(fmt);
@@ -754,7 +824,8 @@ static void print_hexstr(const char* fmt, const uint8_t* v, size_t len)
 #include <locale.h>
 int main()
 {
-    setlocale(LC_ALL, "");
+	setlocale(LC_ALL, "ru_RU.UTF-8");
+//    setlocale(LC_ALL, "");
     setlocale(LC_NUMERIC, "C");
 /*	t(fdb97531) = 2a196f34,
 	t(2a196f34) = ebd9f03a,
@@ -867,8 +938,8 @@ unsigned char ImitaValue[8] =
 	for (i=0; i<2; i++) {
 		r64 = *(uint64_t*)&pt[i*8];
 		r64 = magma_encrypt(ctx.K, r64);
-		uint32_t r0 = __builtin_bswap32(r64);
-		uint32_t r1 = __builtin_bswap32(r64>>32);
+		uint32_t r0 = ntohl((uint32_t)r64);
+		uint32_t r1 = ntohl((uint32_t)(r64>>32));
         printf("%08X %08X ",r0, r1);
 	}
 	printf("\n");
@@ -888,8 +959,8 @@ unsigned char ImitaValue[8] =
 	for (i=0; i<1; i++) {
 		r64 = *(uint64_t*)&wraped_key[i*8];
 		r64 = magma_decrypt(ctx.K, r64);
-		uint32_t r0 = __builtin_bswap32(r64);
-		uint32_t r1 = __builtin_bswap32(r64>>32);
+		uint32_t r0 = ntohl((uint32_t)r64);
+		uint32_t r1 = ntohl((uint32_t)(r64>>32));
         printf("\\x%08X %08X",r0, r1);
 	}
 	printf("\n");
@@ -944,7 +1015,7 @@ printf("МР 26.4.001-2019 Протокол защищенного обмена 
 	}
 	if(__builtin_memcmp(k_enc01, d_key+32, 32)==0)printf("..ok\n");
 	for (i=0; i<32/8; i++) {// переворачиваем ключ
-        *(uint64_t*)(d_key+8*i) =    __builtin_bswap64(*(uint64_t*)(k_enc+24 - 8*i));//31 - i];
+        *(uint64_t*)(d_key+8*i) =    ntohll(*(uint64_t*)(k_enc+24 - 8*i));//31 - i];
 	}
 	printf("Значение производного ключа шифрования\n");
     for (i=0; i<32; i++)   {// распечатываем ключ
@@ -965,7 +1036,7 @@ printf("МР 26.4.001-2019 Протокол защищенного обмена 
     "\xee\xb0\xf6\x81\x42\x57\xad\x08\x96\x4e\xab\xe5\xe0\x99\x3d\x38"
     "\xb2\xaf\xc2\xad\xa2\x4e\x83\x62\xd4\x55\xdb\x06\x95\x1f\x2d\x93";
 	for (i=0; i<32/8; i++) {// переворачиваем ключ
-        *(uint64_t*)(d_key+8*i) =    __builtin_bswap64(*(uint64_t*)(k_mac+24 - 8*i));//31 - i];
+        *(uint64_t*)(d_key+8*i) =    ntohll(*(uint64_t*)(k_mac+24 - 8*i));//31 - i];
 	}
 	magma_ekb(ctx.K, k_mac, 32, 0);
     uint64_t T = magma_cmac(ctx.K, hdr1, 10, data1, 37);
@@ -1064,65 +1135,6 @@ void print_data(uint8_t * data, size_t len) {
     printf("Значение имитовставки ICV=%016"PRIx64"\n", T);
     if (0xf23152388e615825ULL==(T)) printf("..ok\n");
 
-//-------------------------------------------------------
-	printf("[RFC9058]Multilinear Galois Mode (MGM), Smyshlyaev, et al.\n"
-	"A.2.  Test Vectors for the Magma block cipher \n");
-	printf("--Example 1--\n");
-	const uint8_t mgm_key[] =
-	"\xFF\xEE\xDD\xCC\xBB\xAA\x99\x88\x77\x66\x55\x44\x33\x22\x11\x00"
-	"\xF0\xF1\xF2\xF3\xF4\xF5\xF6\xF7\xF8\xF9\xFA\xFB\xFC\xFD\xFE\xFF";
-	MGM_t mgm_ctx;
-	mgm_ctx.K  = ctx.K;
-	magma_ekb(mgm_ctx.K, mgm_key, 32, 0);
-	mgm_ctx.icn = 0x12DEF06B3C130A59;
-//	uint64_t icn =
-	const uint8_t aad[] =
-	"\x01\x01\x01\x01\x01\x01\x01\x01\x02\x02\x02\x02\x02\x02\x02\x02"
-	"\x03\x03\x03\x03\x03\x03\x03\x03\x04\x04\x04\x04\x04\x04\x04\x04"
-	"\x05\x05\x05\x05\x05\x05\x05\x05\xEA";
-	const uint8_t mgm_pt[] =
-	"\xFF\xEE\xDD\xCC\xBB\xAA\x99\x88\x11\x22\x33\x44\x55\x66\x77\x00"
-	"\x88\x99\xAA\xBB\xCC\xEE\xFF\x0A\x00\x11\x22\x33\x44\x55\x66\x77"
-	"\x99\xAA\xBB\xCC\xEE\xFF\x0A\x00\x11\x22\x33\x44\x55\x66\x77\x88"
-	"\xAA\xBB\xCC\xEE\xFF\x0A\x00\x11\x22\x33\x44\x55\x66\x77\x88\x99"
-	"\xAA\xBB\xCC";
-	const uint8_t mgm_ct[] =
-	"\xC7\x95\x06\x6C\x5F\x9E\xA0\x3B\x85\x11\x33\x42\x45\x91\x85\xAE"
-	"\x1F\x2E\x00\xD6\xBF\x2B\x78\x5D\x94\x04\x70\xB8\xBB\x9C\x8E\x7D"
-	"\x9A\x5D\xD3\x73\x1F\x7D\xDC\x70\xEC\x27\xCB\x0A\xCE\x6F\xA5\x76"
-	"\x70\xF6\x5C\x64\x6A\xBB\x75\xD5\x47\xAA\x37\xC3\xBC\xB5\xC3\x4E"
-	"\x03\xBB\x9C";
-	uint8_t mgm_ct_[sizeof(mgm_pt)];
-	magma_mgm_enc(&mgm_ctx, mgm_ct_, mgm_pt, sizeof(mgm_pt)-1);
-	print_hexstr("Plaintext P:", mgm_pt, sizeof(mgm_pt)-1);
-	print_hexstr("C:", mgm_ct_, sizeof(mgm_pt)-1);
-	if (__builtin_memcmp(mgm_ct_, mgm_ct, sizeof(mgm_pt)-1)==0) printf("..ok\n");
-	T =
-	magma_mgm_tag(&mgm_ctx, aad, sizeof(aad)-1, mgm_ct, sizeof(mgm_ct)-1);
-	print_hex("Tag T:  ",0, T);// A7 92 80 69 AA 10 FD 10
-	uint64_t tag_1 = 0xA7928069AA10FD10;
-	if (tag_1 == T) printf("..ok\n");
-
-	printf("--Example 2--\n");
-	const uint8_t mgm_key2[] =
-	"\x99\xAA\xBB\xCC\xDD\xEE\xFF\x00\x11\x22\x33\x44\x55\x66\x77\xFE"
-	"\xDC\xBA\x98\x76\x54\x32\x10\x01\x23\x45\x67\x89\xAB\xCD\xEF\x88";
-	const uint8_t mgm_pt2[] =
-	"\x22\x33\x44\x55\x66\x77\x00\xFF";
-	const uint8_t mgm_ct2[] =
-	"\x6A\x95\xE1\x42\x6B\x25\x9D\x4E";
-	magma_ekb(mgm_ctx.K, mgm_key2, 32, 0);
-	mgm_ctx.icn = 0x0077665544332211;
-	uint8_t mgm_ct2_[sizeof(mgm_pt)];
-	magma_mgm_enc(&mgm_ctx, mgm_ct2_, mgm_pt2, sizeof(mgm_pt2)-1);
-	print_hexstr("Plaintext P:", mgm_pt2, sizeof(mgm_pt2)-1);
-	print_hexstr("C:", mgm_ct2_, sizeof(mgm_pt2)-1);
-	if (__builtin_memcmp(mgm_ct2_, mgm_ct2, sizeof(mgm_pt2)-1)==0) printf("..ok\n");
-	T =
-	magma_mgm_tag(&mgm_ctx, aad, 0, mgm_ct2, sizeof(mgm_ct2)-1);
-	print_hex("Tag T:  ",0, T);// 33 4E E2 70 45 0B EC 9E
-	uint64_t tag_2 = 0x334EE270450BEC9E;
-	if (tag_2 == T) printf("..ok\n");
 if (1) {// KExp15
 
 }
@@ -1153,29 +1165,51 @@ if (1) {// Р 1323565.1.017—2018  KExp15 KImp15
 	// расшифровывание
 	if (magma_KImp15(data, klen, key_exp_mac,  key_exp_enc, iv)
 		&& __builtin_memcmp(data, K, klen)==0) printf("..ok\n");
+
+/*
+1 8899aabbccddeeff0011223344556677fedcba98765432100123456789abcdef
+2 2666ed40ae687811745ca0b448f57a7b390adb5780307e8e9659ac403ae60c60
+3 bb3dd5402e999b7a3debb0db45448ec530f07365dfee3aba8415f77ac8f34ce8
+4 23362fd553cad2178299a5b5a2d4722e3bb83c730a8bf57ce2dd004017f8c565 */
+/*
+    \see Изменение № 1 ГОСТ 34.13-2018 (проект, первая редакция)
+    А.3.8 Режим гаммирования с преобразованием ключа
+    Таблица А.12а – Выработка секционных ключей с помощью функции преобразования ключа ACPKM
+1 8899aabbccddeeff0011223344556677fedcba98765432100123456789abcdef
+2 863ea017842c3d372b18a85a28e2317d74befc107720de0c9e8ab974abd00ca0
+3 49a5e2677de555982b8ad5e826652d17eec847bf5b3997a81cf7fe7f1187bd27
+4 3256bf3f97b5667426a9fb1c5eaabe41893ccdd5a868f9b63b0aa90720fa43c4
+шифрованный текст Правильный ответ:
+ 2A B8 1D EE EB 1E 4C AB 68 E1 04 C4 BD 6B 94 EA
+ C7 2C 67 AF 6C 2E 5B 6B 0E AF B6 17 70 F1 B3 2E
+ A1 AE 71 14 9E ED 13 82 AB D4 67 18 06 72 EC 6F
+ 84 A2 F1 5B 3F CA 72 C1
+
+*/
+
 	printf("ACPKM\n");
 	magma_ekb(ctx.K, K, 32,0);
 	uint8_t *k = (uint8_t *)ctx.K;
 	for (i=0; i< klen; i++) {
-		printf(" %02X", k[i]);
+		printf(" %02X", k[31-i]);
 		if ((i&0xF)==0xF) printf("\n");
 	}
 	printf("\n");
 	magma_ACPKM(ctx.K);
 	for (i=0; i< klen; i++) {
-		printf(" %02X", k[i]);
+		printf(" %02X", k[31-i]);
 		if ((i&0xF)==0xF) printf("\n");
 	}
 	printf("\n");
 	magma_ACPKM(ctx.K);
 	for (i=0; i< klen; i++) {
-		printf(" %02X", k[i]);
+		printf(" %02X", k[31-i]);
 		if ((i&0xF)==0xF) printf("\n");
 	}
 	printf("\n");
 	magma_ACPKM(ctx.K);
 	for (i=0; i< klen; i++) {
-		printf(" %02X", k[i]);
+		printf(" %02X", k[31-i]);
 		if ((i&0xF)==0xF) printf("\n");
 	}
 	printf("\n");
@@ -1186,7 +1220,7 @@ if (1) {// Р 1323565.1.017—2018  KExp15 KImp15
 		"\x11\x22\x33\x44\x55\x66\x77\x88\x99\xAA\xBB\xCC\xEE\xFF\x0A\x00"
 		"\x22\x33\x44\x55\x66\x77\x88\x99";
 	magma_ekb(ctx.K, K, 32,0);
-	magma_ctr_acpkm(ctx.K, __builtin_bswap32(*(uint32_t*)iv2), msg, sizeof(msg)-1);
+	magma_ctr_acpkm(ctx.K, ntohl(*(uint32_t*)iv2), msg, sizeof(msg)-1);
 // шифрованный текст
 	for (i=0; i< sizeof(msg)-1; i++) {
 		printf(" %02X", msg[i]);
@@ -1195,6 +1229,248 @@ if (1) {// Р 1323565.1.017—2018  KExp15 KImp15
 	printf("\n");
 
 }
+if (1) {// МР 26.4.004-2021
+	printf("МР 26.4.004-2021\n");
+	CRISP_t ctx1;
+	CRISP_t* ctx = crisp_init(&ctx1);
+	uint8_t CS = 1; // криптонабор 
+	uint8_t key_ab[32] = 
+		"\x88\x99\xaa\xbb\xcc\xdd\xee\xff\x00\x11\x22\x33\x44\x55\x66\x77"
+		"\xfe\xdc\xba\x98\x76\x54\x32\x10\x01\x23\x45\x67\x89\xab\xcd\xef";
+	uint8_t src_id[16] =
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a";
+	uint8_t KeyIdAB[42] = 
+		//"\xa8"
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x0b\x00\x00\x00\x00\x00\x00\x00\x01";
+	int key_id_len = 32+8;
+	uint8_t SessionID[] = "\x00\x00\x00\x01";
+	crisp_set_key(ctx, CS, key_ab, 32, KeyIdAB, key_id_len, src_id, 16);
+	ctx->seq_max = 0;
+	uint8_t msg[] =
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x0b\x00\x00\x00\x01\x01\x00\x10\x02\x00\x01";
+	int mlen = 32+11;
+
+	int len = crisp_encode(ctx, msg, mlen);
+	printf("Encode (%d):\n",len);
+	for(int i=0; i<len; i++) printf(" %02X",ctx->buffer[i]);
+	printf("\n");
+	int hlen = crisp_decode(ctx, ctx->buffer, len);
+	//len = len - hlen-4;// CS=1 icv_len=4;
+	printf("Decode (%d):\n",len);
+	for(int i=0; i<len; i++) printf(" %02X",ctx->buffer[i]);
+	printf("\n");
+	uint32_t K[32];
+	//reverse(key_ab,32);
+	magma_ekb(K, key_ab, 32, 0);
+	uint8_t d_key[64];
+    crisp_key_derive(d_key, K, CS, /* 0x01a06ee6760bULL */1uLL, src_id, 16);
+	printf("d_key =\n");
+	for(int i=0; i<32; i++) printf(" %02X",d_key[i]);
+	printf("\n");	
+	for(int i=0; i<32; i++) printf(" %02X",d_key[i+32]);
+	printf("\n");
+
+
+	
+	
+	uint8_t k_enc[] = 
+		"\x73\x7f\xa0\x43\x22\xae\x79\xbb\x42\xf6\x49\x79\x8b\xb6\xaf\xfd"
+		"\xee\xdd\xdc\x32\xb2\x5e\xd9\x6c\xce\x3e\xae\x9b\x0a\x3d\xbd\x9d";
+	uint8_t k_mac[] = 
+		"\x7b\x3d\x46\xda\x25\x0c\x0f\x6a\x20\xd5\x19\xee\xc2\xc7\x23\xf5"
+		"\x54\x73\x43\xa0\xe3\xfe\x98\x7b\xa5\xb5\x15\xa5\x9b\x8f\x91\xce";
+	uint8_t pdu[] = 
+		"\x4a\xe6\xf0\xf1\xdf\xac\x83\xc7\x25\xa8\x69\xba\x5c\x19\xb9\xcf"
+		"\x80\x6d\x81\x14\xf2\xb8\x15\xec\xc2\xbf\xa5\xd5\x7e\x72\x88\x67"
+		"\x74\x2d\x2f\x5e\x76\xc6\x8a\x41\x98\x30\xe5";
+	uint32_t iv = 1;
+	uint32_t key[8];
+	magma_ekb(key, k_enc, 32, 0);
+	magma_ctr(key, iv, msg, mlen);
+	printf("msg[] = \n"); 
+	for(int i=0; i<mlen; i++) printf(" %02X", msg[i]);
+	if (__builtin_memcmp(msg, pdu, mlen)==0) printf("..ok\n");
+	else printf("..fail\n");
+	
+	uint8_t M[128] = "\x00\x00\x01"
+		"\xa8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+		"\x0b\x00\x00\x00\x00\x00\x00\x00\x01"
+		"\x00\x00\x00\x00\x00\x01"
+		"\x4a\xe6\xf0\xf1\xdf\xac\x83\xc7\x25\xa8\x69\xba\x5c\x19\xb9\xcf"
+		"\x80\x6d\x81\x14\xf2\xb8\x15\xec\xc2\xbf\xa5\xd5\x7e\x72\x88\x67"
+		"\x74\x2d\x2f\x5e\x76\xc6\x8a\x41\x98\x30\xe5";
+	uint8_t ICV[] = "\xf8\xfb\x4f\xe7";
+	magma_ekb(key, k_mac, 32, 0);
+	uint64_t icv = magma_cmac(key, M, 32+9+9, M+50, 32+11);
+	printf("icv=%llx", (icv>>32));
+	if ((uint32_t)__builtin_bswap32(icv>>32) == *(uint32_t*)ICV) printf("..ok\n");
+	else printf("..fail\n");
+}
+if (1) { // Изменение № 1 Р 1323565.1.029-2019 
+	printf("Р 1323565.1.029-2019 MAGMA-CTR-CMAC8: CS = 3\n");
+	MagmaCtx ctx;
+	uint8_t CS = 3; // криптонабор 
+	uint64_t SeqNum = 0x0b76e6736001uLL;
+	uint32_t KeyId  = 0x30;
+	uint8_t  SourseIdentifier[] = "\x30\x32\x30\x35\x31\x38\x30\x30\x30\x30\x30\x31";
+	uint8_t  key[] ="\x56\x50\x94\x27\x15\x32\x49\x65\x34\x98\x52\x46\x59\x32\x46\x53"
+					"\x04\x53\x29\x45\x34\x65\x93\x84\x50\x73\x24\x95\x76\x35\x12\x90";
+	uint8_t  data[]="\x48\x69\x21\x20\x54\x68\x69\x73\x20\x69\x73\x20\x74\x65\x73\x74"
+					"\x20\x66\x6f\x72\x20\x43\x52\x49\x53\x50\x20\x6d\x65\x73\x73\x61"
+					"\x67\x65\x73\x0a\x03";
+	uint8_t k_mac03[] = 
+					"\x74\x2a\xe2\xac\xeb\xae\x5f\xed\x1c\xc7\xac\xfd\x61\x4d\x9c\xf2"
+					"\x98\xae\xee\xa7\xa7\x7a\x99\x7b\xc1\x9b\x99\xb9\xbe\xeb\x88\x32";
+	uint8_t k_enc03[] = 
+					"\xc2\x41\xeb\xfa\xc4\x9d\x47\x68\x59\xe1\xe6\x38\x8a\x94\x66\x0b"
+					"\x65\xd6\xb7\x40\xa3\x83\x63\xab\xb9\x12\x92\x97\x25\x0d\xdb\x22";
+	uint8_t icv03[]="\xed\xf3\x39\xa0\xdb\xc0\xb5\xb7";
+	uint8_t data03[] = 
+					"\x48\x69\x21\x20\x54\x68\x69\x73\x20\x69\x73\x20\x74\x65\x73\x74"
+					"\x20\x66\x6f\x72\x20\x43\x52\x49\x53\x50\x20\x6d\x65\x73\x73\x61"
+					"\x67\x65\x73\x0a\x03";
+	uint8_t hdr[32];
+	uint8_t  k_der[64];
+	magma_ekb(ctx.K, key, 32,0);
+    crisp_key_derive(k_der, ctx.K, CS, SeqNum, SourseIdentifier, 12);
+	if (CS&1){
+		magma_ekb(ctx.K, k_der+32, 32,0);
+		magma_ctr(ctx.K, (uint32_t)SeqNum, data03, 32+5);
+	}
+
+	print_data(k_der, 32);
+	if(__builtin_memcmp(k_mac03, k_der, 32)==0)printf("..ok\n");
+	print_data(k_der+32, 32);// ключ шифрования
+	if(__builtin_memcmp(k_enc03, k_der+32, 32)==0)printf("..ok\n");
+	print_data(data03, 32+5);
+	
+	int hlen = crisp_header(hdr, CS, SeqNum, (uint8_t*)&KeyId, 1);
+	magma_ekb(ctx.K, k_der, 32,0);
+	uint64_t icv = magma_cmac(ctx.K, hdr, hlen, data03, 32+5);
+	print_data(hdr, hlen);
+	print_data(data03, 32+5);
+	printf("icv=%llx", (icv));
+	if (*(uint64_t*)icv03==htonll(icv)) printf("..ok\n");
+}
+if (1) { // Изменение № 1 Р 1323565.1.029-2019 идентично ГОСТ
+	printf("Р 1323565.1.029-2019 MAGMA-NULL-CMAC8: CS = 4\n");
+	MagmaCtx ctx;
+	//CRISP_t* ctx = crisp_init(&ctx1);
+	uint8_t CS = 4; // криптонабор 
+	uint64_t SeqNum = 0x0b76e66ea001uLL;
+	uint8_t  SourseIdentifier[] = "\x30\x32\x30\x35\x31\x38\x30\x30\x30\x30\x30\x31";
+	uint8_t  key[] ="\x56\x50\x94\x27\x15\x32\x49\x65\x34\x98\x52\x46\x59\x32\x46\x53"
+					"\x04\x53\x29\x45\x34\x65\x93\x84\x50\x73\x24\x95\x76\x35\x12\x90";
+	uint8_t  data[]="\x48\x69\x21\x20\x54\x68\x69\x73\x20\x69\x73\x20\x74\x65\x73\x74"
+					"\x20\x66\x6f\x72\x20\x43\x52\x49\x53\x50\x20\x6d\x65\x73\x73\x61"
+					"\x67\x65\x73\x0a\x03";
+	uint8_t k_mac04[] = 
+					"\x5d\x48\x85\xa4\x8e\x3b\xee\x6f\x79\xa3\xbd\x09\x9a\xda\x4f\x68"
+					"\x21\xdc\xf8\x16\x91\xd6\x71\x0a\xf3\x01\x6c\x85\xae\x06\xeb\xc4";
+	uint8_t icv04[]="\xf2\x31\x52\x38\x8e\x61\x58\x25";
+	uint8_t pdu[] = "\x80\x00\x04\x30\x0b\x76\xe6\x6e\xa0\x01"
+					"\x48\x69\x21\x20\x54\x68\x69\x73\x20\x69\x73\x20\x74\x65\x73\x74"
+					"\x20\x66\x6f\x72\x20\x43\x52\x49\x53\x50\x20\x6d\x65\x73\x73\x61"
+					"\x67\x65\x73\x0a\x03"
+					"\xf2\x31\x52\x38\x8e\x61\x58\x25";
+	uint8_t  k_mac[32];
+	magma_ekb(ctx.K, key, 32,0);
+    crisp_key_derive(k_mac, ctx.K, CS, SeqNum, SourseIdentifier, 12);
+	print_data(k_mac, 32);
+	magma_ekb(ctx.K, k_mac, 32,0);
+	uint64_t icv = magma_cmac(ctx.K, pdu, 10, pdu+10, 32+5);
+	printf("icv=%llx", (icv));
+	if (*(uint64_t*)icv04==htonll(icv)) printf("..ok\n");
+}
+
+if (1){// протока A.1 Выработка ключей
+	printf("Р 1323565.1.046-2023 (ProtoQa) A.1\n");	
+	uint8_t CS = 1; // криптонабор 
+	uint8_t key_ab[32] = 
+		"\x88\x99\xaa\xbb\xcc\xdd\xee\xff\x00\x11\x22\x33\x44\x55\x66\x77"
+		"\xfe\xdc\xba\x98\x76\x54\x32\x10\x01\x23\x45\x67\x89\xab\xcd\xef";
+	uint8_t s_id[16] =
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a";
+	uint8_t r_id[16] =
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0b";
+	uint8_t KeyIdAB[] = 
+		"\xa8"
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a"
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0b"
+		"\x00\x01\x10\x00\x01\x00\x00\x01";
+	uint8_t KeyIdBA[] = 
+		"\xa8"
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0b"
+		"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a"
+		"\x00\x01\x00\x00\x01\x00\x00\x01";
+	uint8_t key_ba[32] = 
+		"\xff\xee\xdd\xcc\xbb\xaa\x99\x88\x77\x66\x55\x44\x33\x22\x11\x00"
+		"\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff";
+		
+	uint64_t SeqNum = 0;
+	uint8_t k_der[64];
+	MagmaCtx ctx;
+	magma_ekb(ctx.K, key_ab, 32,0);
+
+	crisp_key_derive(k_der, ctx.K, CS, SeqNum, s_id, 16);
+	print_data(k_der, 32);// k_mac
+	print_data(k_der+32, 32);// k_enc
+	printf("Р 1323565.1.046-2023 (ProtoQa) A.2\n");
+#define DEV_F 0x100000
+	uint8_t hdr[64];
+	hdr[0] = 0;
+	hdr[1] = 0;
+	hdr[2] = CS;
+	uint8_t* key_id = hdr+3;
+	crisp_key_id(key_id, s_id, r_id, 1, 1|DEV_F, 1);// от СКЗИ к узлу СВРК
+	print_data(key_id, 41);
+	*(uint64_t*)(hdr+44) = htonll(SeqNum<<16);// 48 бит
+	//int hlen = crisp_header(hdr, CS, SeqNum, (uint8_t*)&key_id, 1);
+	printf("crisp header =\n"); 
+	print_data(hdr, 50);
+	
+}
+if (1){// протока A.6.1 Выработка ключей
+	printf("Р 1323565.1.046-2023 (ProtoQa)\n");	
+	uint8_t dk[64]; 
+	uint8_t label[32]; 
+	uint8_t s_id [] = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0b";
+	uint8_t r_id [] =
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x0a";
+	
+	int llen = _label(label, "cr", s_id, r_id, 0);
+	print_data(label, llen);
+	uint32_t Key[8];
+//	magma_ekb(ctx.K, key_ab, 32,0);
+	//_kdf_tree_cmac(dk, Key, label, llen, 0x100001, );
+}
+if (1){ 
+	printf("Р 1323565.1.017-2018 Б.1 Алгоритм экспорта ключа\n");	
+	uint8_t key[] = 
+		"\x88\x99\xaa\xbb\xcc\xdd\xee\xff\x00\x11\x22\x33\x44\x55\x66\x77"
+		"\xfe\xdc\xba\x98\x76\x54\x32\x10\x01\x23\x45\x67\x89\xab\xcd\xef";
+	uint8_t key_ac[] = // экспортируемый ключ
+		"\x11\x11\x22\x22\x33\x33\x44\x44\x55\x55\x66\x66\x77\x77\x88\x88"
+		"\x99\x99\x00\x00\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd\xee\xee\xff\xff";
+	uint8_t key_exp_mac[] = 
+		"\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x00\x01\x02\x03\x04\x05\x06\x07"
+		"\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f";
+	uint8_t key_exp_enc[] = 
+		"\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f"
+		"\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x30\x31\x32\x33\x34\x35\x36\x37";	
+	uint8_t key_mac [] = 		
+		"\x10\x02\x2a\xde\x94\xee\x55\xb4\x34\xd2\x07\x7f\x5a\x13\xaf\xf4";
+	uint8_t iv[] = "\x67\xBE\xD6\x54";
+		"\x09\x09\x47\x2d\xd9\xf2\x6b\xe8";
+	uint8_t	data[64];
+	__builtin_memcpy(data, key, 32);
+}
+
     return 0;
 }
 #endif

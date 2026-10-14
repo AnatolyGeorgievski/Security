@@ -2,6 +2,22 @@
 
 Формат близок к Keep a Changelog. Даты — день работы, не semver.
 
+## [2026-10-14]
+
+### Added
+- `src/pkix/`: просмотр PEM, CMS и контейнеров PKCS. `Makefile` собирает OCSP из `src/bigbrother/ocsp` на месте. Каталог bigbrother, сертификаты и закрытый ключ в коммит не входят. Загрузка издателя и CRL по HTTP — заглушка `http_rest`. Кривые и разбор OCSP — заглушки `eckey_stub.c` и `ocsp_stub.c`: в дереве нет `mp.h`.
+- Кузнечик регистрируется в `cipher` из `kuzn_clmul.c` (PCLMUL и не GFNI), `kuzn_gfni.c` и `kuzn_neon.c`. Собственный `main` закрыт `TEST_KUZN` и `TEST_KUZN_CLMUL`.
+- `cpuid` держит AVX2 отдельным флагом и печатает его рядом с AVX-VNNI, AVX-IFMA, AVX-VNNI-INT8, AVX-NE-CONVERT и AVX-VNNI-INT16. Имена AVX512-IFMA, AVX512-VBMI, AVX512-VNNI и AVX512-BF16. Добавлены MOVRS и AMX-COMPLEX.
+
+### Changed
+- `src/magma.c`: CRISP переведён на `CRISP_t`. Появились `crisp_key_id`, дерево KDF, `crisp_set_key`, `crisp_encode` и `crisp_decode` с окном номеров. Прежний контур MGM снят.
+- В комментарии AES: «развернутого ключа».
+
+### Журнал
+- `log/2026-10-14 Заново изобретаем простые числа.md`: порядок группы L = 2^252 + D и тот же каркас редукции, что для поля 2^255-19.
+- `log/2026-10-14 модели мышления.md`: отзыв про резонансный контур и проверка речевого буфера снаружи ответа.
+- `log/2026-10-14 разворот из зерна.md`: таблица класса BN. Модульные `mp_addm` и соседи в класс не входят.
+
 ## [2026-10-13]
 
 ### Added
