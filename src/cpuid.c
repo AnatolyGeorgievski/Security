@@ -56,7 +56,7 @@ static void  __attribute__((constructor)) cpuid_init()
         printf("%.48s\n", (char*)name);
     } else
         printf("%s\n", (char*)name);
-
+// 
 
     __cpuid(1, ax,bx,cx,dx);
 	// printf("Cache line: %d B\n", ((bx>>8)&0xFF)*8);
@@ -96,7 +96,7 @@ int cpu_family_id = (ax>>8)&0xF;
 int cpu_model_id  = (ax>>4)&0xF;
 	cpu_model_id |= (cpu_family_id==6 || cpu_family_id==15)? (ax>>16<<4)&0xF0: 0;
 	cpu_family_id+= (cpu_family_id==15)? ((ax>>20)&0xFF):0;
-int avx10 = 0;
+int avx10 = 0, avx2 = 0;
     if (cpuid_max_func>=0x7) {
         __cpuid_count(7,0, ax,bx,cx,dx);
     /*  CPUID.(EAX=07H, ECX=0H):EBX.AVX2[bit 5]==1
@@ -105,7 +105,7 @@ int avx10 = 0;
         if (bx& (1<<2))    printf(" SGX");
         if (bx& (1<<3))    printf(" BMI1");
         if (bx& (1<<4))    printf(" HLE");
-        if (bx& (1<<5))    printf(" AVX2");
+        if (bx& (1<<5))    {avx2 = 1, printf(" AVX2");}
         if (bx& (1<<8))    printf(" BMI2");
         if (bx& (1<<9))    printf(" ERMS");
         if (bx& (1<<11))   printf(" RTM");
@@ -115,7 +115,7 @@ int avx10 = 0;
         if (bx& (1<<18))   printf(" RDSEED");
         if (bx& (1<<19))   printf(" ADX");
         if (bx& (1<<20))   printf(" SMAP");
-        if (bx& (1<<21))   printf(" AVX512IFMA");
+        if (bx& (1<<21))   printf(" AVX512-IFMA");
         if (bx& (1<<23))   printf(" CLFLUSHOPT");
         if (bx& (1<<26))   printf(" AVX512PF");
         if (bx& (1<<27))   printf(" AVX512ER");
@@ -124,12 +124,12 @@ int avx10 = 0;
         if (bx& (1<<30))   printf(" AVX512BW");
         if (bx& (1<<31))   printf(" AVX512VL");
 		
-        if (cx& (1<< 1))   printf(" AVX512_VBMI"); // bit manipulation
-        if (cx& (1<< 6))   printf(" AVX512_VBMI2"); // bit manipulation
+        if (cx& (1<< 1))   printf(" AVX512-VBMI"); // bit manipulation
+        if (cx& (1<< 6))   printf(" AVX512-VBMI2"); // bit manipulation
         if (cx& (1<< 8))   printf(" GFNI"); // Galois Field 2^8
         if (cx& (1<< 9))   printf(" VAES"); //
         if (cx& (1<<10))   printf(" VPCLMULQDQ"); //
-        if (cx& (1<<11))   printf(" AVX512_VNNI"); //
+        if (cx& (1<<11))   printf(" AVX512-VNNI"); //
         if (cx& (1<<12))   printf(" AVX512_BITALG"); //
         if (cx& (1<<14))   printf(" AVX512_VPOPCNTDQ"); // bit manipulation
         if (cx& (1<<27))   printf(" MOVDIRI");
@@ -150,35 +150,69 @@ int avx10 = 0;
 		if (ax& (1<<1))    printf(" SM3");
 		if (ax& (1<<2))    printf(" SM4");
 		if (ax& (1<<3))    printf(" RAO-INT");
-		if (ax& (1<<4))    printf(" AVX-VNNI");
-		if (ax& (1<<5))    printf(" AVX512_BF16");
+		if (ax& (1<<5))    printf(" AVX512-BF16");
 		if (ax& (1<<21))   printf(" AMX-FP16");
-		if (ax& (1<<23))   printf(" AVX-IFMA");
-		if (dx& (1<<4))    printf(" AVX-VNNI-INT8");
-		if (dx& (1<<4))    printf(" AMX-COMPLEX");
-		if (dx& (1<<10))   printf(" AVX-VNNI-INT16");
-		if (dx& (1<<19))   {
-			printf(" AVX10");
-			avx10 = 1;
-		}
-    }
-    /* CPUID.(EAX=80000001H):ECX.LZCNT[bit 5]==1 */
-    __cpuid(0x80000001, ax,bx,cx,dx);
-    if (cx& (1<< 5))    printf(" ABM"); // advansed bit manipulation
-    if (cx& (1<< 6))    printf(" SSE4a");
-    if (cx& (1<<21))    printf(" TBM");
-    if (dx& (1<< 4))    printf(" TSC");// timestamp
-    if (dx& (1<<15))    printf(" CMOV");
-    if (dx& (1<<23))    printf(" MMX");
-    if (dx& (1<<31))    printf(" 3DNOW");
+		if (ax& (1<<31))   printf(" MOVRS");
+		
+		if (dx& (1<<8))    printf(" AMX-COMPLEX");
 
+        if (avx2){
+            printf("\nAVX:");
+            if (ax& (1<<4))    printf(" AVX-VNNI");
+            if (ax& (1<<23))   printf(" AVX-IFMA");
+            if (dx& (1<<4))    printf(" AVX-VNNI-INT8");
+            if (dx& (1<<5))    printf(" AVX-NE-CONVERT");
+            if (dx& (1<<10))   printf(" AVX-VNNI-INT16");
+        }
+        if (dx& (1<<19))       avx10 = 1;
+    }
+	if (avx10) {// CPUID.(EAX=07H,ECX=01H):EDX[bit 19] Intel® AVX10 Converged Vector ISA is supported
+		__cpuid_count(0x24,0, ax,bx,cx,dx);
+		printf("\nAVX10.%d:", bx&0xFF);
+        // AX - maximum supported sub-leaf
+        if (ax>=1) {
+		    __cpuid_count(0x24,1, ax,bx,cx,dx);
+            if (cx& (0x1<< 2))    printf(" AVX10-VNNI-INT", cx);
+        }
+	}
+    if (cpuid_max_func>=0x1E) {
+        __cpuid_count(0x1E,1, ax,bx,cx,dx);
+        printf("\nAMX:");
+        if (bx!=0) printf(" TMUL[%d x %d]", bx&0xFF, (bx>>8)&0xFFFF);
+        if (ax!=0) {// echo "" | gcc -march=clearwaterforest -dM -E - | grep AMX
+            if (ax& (1<< 0))    printf(" AMX-INT8");
+            if (ax& (1<< 1))    printf(" AMX-BF16");
+            if (ax& (1<< 2))    printf(" AMX-COMPLEX");
+            if (ax& (1<< 3))    printf(" AMX-FP16");
+            if (ax& (1<< 4))    printf(" AMX-FP8");
+            if (ax& (1<< 5))    printf(" AMX-TRANSPOSE");
+            if (ax& (1<< 6))    printf(" AMX-TF32");
+            if (ax& (1<< 7))    printf(" AMX-AVX512");
+            if (ax& (1<< 8))    printf(" AMX-MOVRS");
+        }
+    }
+// System-On-Chip Vendor Attribute Enumeration Main Leaf (Initial EAX Value = 17H, ECX = 0)
+    if (cpuid_max_func>=0x17){
+        __cpuid_count(0x17,0, ax,bx,cx,dx);
+        int maxSOC = ax;
+        if (maxSOC>=3) {
+            printf("\nSoC: Vendor Id=%x Project=%x Stepping=%x\n", bx&0xFFFF, cx, dx); 
+            // System-On-Chip Vendor Attribute Enumeration Sub-leaf (Initial EAX Value = 17H, ECX = 1..3)
+        }
+    } 
+    if (0) {// не интересно
+        /* CPUID.(EAX=80000001H):ECX.LZCNT[bit 5]==1 */
+        __cpuid(0x80000001, ax,bx,cx,dx);
+        if (cx& (1<< 5))    printf(" ABM"); // advansed bit manipulation
+        if (cx& (1<< 6))    printf(" SSE4a");
+        if (cx& (1<<21))    printf(" TBM");
+        if (dx& (1<< 4))    printf(" TSC");// timestamp
+        if (dx& (1<<15))    printf(" CMOV");
+        if (dx& (1<<23))    printf(" MMX");
+        if (dx& (1<<31))    printf(" 3DNOW");
+    }
 
     printf("\n");
-	if (avx10) {
-		__cpuid_count(0x24,0, ax,bx,cx,dx);
-		printf(" AVX10 Version=%d\n", bx&0xFF);
-		//__cpuid_count(0x24,1, ax,bx,cx,dx);
-	}
 	
     if (cpuid_max_func >= 0x6)
     {// EAX=80000006h: Extended L2 Cache Features
@@ -187,12 +221,48 @@ int avx10 = 0;
 		printf("Cache line size: %d B\n", cache_line_size);
 
 	}
-    if (cpuid_max_func >= 0xB) // для новых процессоров Intel, для AMD другой метод
+    if (cpuid_max_func >= 0x16) {// Processor Frequency Information
+        __cpuid_count(0x1F, 0, ax,bx,cx,dx);
+        if (ax!=0) 
+        printf("Frequency Base: %d MHz, Max: %d MHz, Bus: %d MHz\n", ax&0xFFFF, bx&0xFFFF, cx&0xFFFF);
+    }
+    if (cpuid_max_func >= 0x1F) {// Для новых процессоров
+        const char* DomainType[] = {// Domain Type Identification Value
+            [0] = "undef",
+            [1] = "Logical Processor",
+            [2] = "Core",
+            [3] = "Module",
+            [4] = "Tile",
+            [5] = "Die",
+            [6] = "DieGrp",
+            [7] = "Package/Socket"};
+        int i;
+        for(i=0;i<0xF; i++)
+        {
+            __cpuid_count(0x1F, i, ax,bx,cx,dx); // треды
+            if ((ax&0xF)==0) break;
+            printf("%s: %d\n", DomainType[(cx>>8)&0x7], /* ax&0xF, */ bx&0xFFFF/*, ID=dx */);
+        }
+    } else
+    if (cpuid_max_func >= 0xB) // для Intel x86_64, для AMD другой метод
     {
-        __cpuid_count(0xB, 0, ax,bx,cx,dx); // треды
-        printf("Threads per core: %d\n", bx&0xFFFF);
-        __cpuid_count(0xB, 1, ax,bx,cx,dx); // ядры
-        printf("Logical processors: %d\n", bx&0xFFFF);
+//        __cpuid_count(0xB, 0, ax,bx,cx,dx); // треды
+//        printf("Threads per core: %d\n", bx&0xFFFF);
+//        __cpuid_count(0xB, 1, ax,bx,cx,dx); // ядры
+//        printf("Logical processors: %d\n", bx&0xFFFF);
+        const char* DomainType[] = {// Domain Type Identification Value
+            [0] = "undef",
+            [1] = "Threads per core  ",
+            [2] = "Logical Processors", 
+            [3] = "undef" };
+        int i;
+        for(i=0;i<0xF; i++)
+        {
+
+            __cpuid_count(0xB, i, ax,bx,cx,dx); // треды
+            if ((ax&0xF)==0) break;
+            printf("%s: %d\n", DomainType[(cx>>8)&0x3], /* ax&0xF, */ bx&0xFFFF/*, ID=dx */);
+        }
     } else
     if (cpuid_max_func >= 0x4) {
         int i;
@@ -251,23 +321,38 @@ int avx10 = 0;
 		case 0xA7: 	cpu_model_name="Rocket Lake"; break;
 		case 0xAA: 	cpu_model_name="Meteor Lake"; break;
 		case 0xAD: 	cpu_model_name="Granite Rapids"; break;
-		case 0xAE: 	cpu_model_name="Granite Rapids"; break;
+		case 0xAE: 	cpu_model_name="Granite Rapids-D"; break;
 		case 0xAF: 	cpu_model_name="Sierra Forest"; break;
 		case 0xB6: 	cpu_model_name="Grand Ridge"; break;
 		case 0xB7: 	cpu_model_name="Raptor Lake-S"; break;
 		case 0xBA: 	cpu_model_name="Raptor Lake"; break;
+        case 0xBC: 	cpu_model_name="Lunar Lake-S"; break;
 		case 0xBD: 	cpu_model_name="Lunar Lake"; break;
 		case 0xBF: 	cpu_model_name="Raptor Lake"; break;
-		case 0xC5: 	cpu_model_name="Arrow Lake"; break;
-		case 0xC6: 	cpu_model_name="Arrow Lake"; break;
+		case 0xB5: 	cpu_model_name="Arrow Lake-U"; break;
+		case 0xC5: 	cpu_model_name="Arrow Lake-H"; break;
+		case 0xC6: 	cpu_model_name="Arrow Lake-S"; break;
 		case 0xCC: 	cpu_model_name="Panther Lake"; break;
 		case 0xCF: 	cpu_model_name="Emerald Rapids Server"; break;
+        case 0xD5: 	cpu_model_name="Wildcat Lake"; break;
 		case 0xDD: 	cpu_model_name="Clearwater Forest"; break;
-		
 		default: 	cpu_model_name=""; break;
 		}
 	} else 
-	if (cpu_family_id==0x17){
+	if (cpu_family_id==0x12){
+		switch (cpu_model_id){
+        case 0x01: 	cpu_model_name="Nova Lake"; break;
+        case 0x02: 	cpu_model_name="Nova Lake-M"; break;
+		default: 	cpu_model_name=""; break;
+		}
+    } else
+	if (cpu_family_id==0x13){// Intel
+		switch (cpu_model_id){
+        case 0x01: 	cpu_model_name="Diamond Rapids"; break;
+		default: 	cpu_model_name=""; break;
+		}
+    } else
+	if (cpu_family_id==0x17){// AMD
 		switch (cpu_model_id){
 		case 0x31: 	cpu_model_name="Rome"; break;
 		default:	cpu_model_name="Zen 1/2"; break;
@@ -284,15 +369,32 @@ int avx10 = 0;
 		}
 	}
 	if (cpu_family_id==0x1A){
-		cpu_model_name="Zen 5";
+        switch (cpu_model_id){
+		default:	cpu_model_name="Zen 5/6";
+        }
 	}
 		
 	printf("cpuid = %02X_%02X %s\n", cpu_family_id, cpu_model_id, cpu_model_name);
 #endif
 }
 #ifdef TEST_CPUID
+#include <unistd.h>
+#if defined(_WIN32) || defined(__WIN32__)
+#include <windows.h>
+static int get_nprocs()
+{
+  SYSTEM_INFO sysinfo;
+  GetSystemInfo (&sysinfo);
+  return (int)sysinfo.dwNumberOfProcessors;
+}
+#endif
+#if defined(__linux__)
+#include <sys/sysinfo.h> // get_nprocs;
+#endif
 int main()
 {
+    //printf("nproc = %2d\n", sysconf(_SC_NPROCESSORS_ONLN));
+    //printf("nproc = %2d\n", get_nprocs());
     return 0;
 }
 #endif

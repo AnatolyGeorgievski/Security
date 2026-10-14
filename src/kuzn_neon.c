@@ -195,7 +195,7 @@ void kuzn_key_expansion(KuznCtx * ctx, const uint8_t* key, int klen, int ekb)
     }
 }
 
-// test
+#ifdef TEST_KUZN
 #include <inttypes.h>
 #include <stdio.h>
 int main()
@@ -227,3 +227,15 @@ int main()
 	}
 	return 0;
 }
+#endif
+
+#include "cipher.h"
+CIPHER(GOST_R_3412_2015_KUZN)
+{
+    .id = CIPH_KUZNYECHIK,
+    .name = "GOST R 34.12-2015 (Kuznyechik)",
+    .block_len = 128,
+    .ctx_size = sizeof(KuznCtx),
+    .key_exp = (void*)kuzn_key_expansion,
+    .encrypt = (void*)kuzn_encrypt,
+};

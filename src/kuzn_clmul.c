@@ -2,9 +2,9 @@
 	Copyright(c) 2019-2022 Anatoly Georgievskii <anatoly.georgievski@gmail.com>
 	
 	Для некоммерческого использования. Если планируете использовать в коммерческом проекте, 
-	поделитесь финансированием. 
+	поделитесь финансированием! 
 	
-	[RFC9058](https://www.rfc-editor.org/rfc/rfc9058.html) Multilinear Galois Mode (MGM), June 2021
+	[RFC9058]: <https://www.rfc-editor.org/rfc/rfc9058.html> "Multilinear Galois Mode (MGM), June 2021"
 	
 $ gcc -O3 -march=native -o kuzn kuzn_clmul.c
 $ arm-eabi-gcc -march=armv7-a -mthumb -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -O3 -S -o - kuzn_clmul.c | less
@@ -187,7 +187,7 @@ typedef uint64_t poly64x2_t __attribute__((__vector_size__(16)));
 typedef uint8_t  poly8x16_t __attribute__((__vector_size__(16)));
 typedef uint8_t  poly16x8_t __attribute__((__vector_size__(16)));
 typedef uint8_t  uint8x16_t __attribute__((__vector_size__(16)));
-typedef char     int8x16_t __attribute__((__vector_size__(16)));
+typedef char      int8x16_t __attribute__((__vector_size__(16)));
 typedef uint16_t uint16x8_t __attribute__((__vector_size__(16)));
 
 static inline uint8x16_t vld1q_u8(const uint8_t* p) {
@@ -210,11 +210,12 @@ static inline uint8x16_t vld1q_u8(const uint8_t* p) {
 #define UNPACKLBW128(a,b) __builtin_shuffle((int8x16_t)a, b, (int8x16_t){0, 16+0, 1, 16+1,  2, 16+ 2,  3, 16+ 3,  4, 16+ 4,  5, 16+ 5,  6, 16+ 6,  7, 16+ 7});
 #define UNPACKHBW128(a,b) __builtin_shuffle((int8x16_t)a, b, (int8x16_t){8, 16+8, 9, 16+9, 10, 16+10, 11, 16+11, 12, 16+12, 13, 16+13, 14, 16+14, 15, 16+15});
 
-static inline
+#define CL_MUL128(a,b,im) ((poly64x2_t)__builtin_ia32_pclmulqdq128((int64x2_t)(a),(int64x2_t)(b),im))
+/*static inline
 poly64x2_t CL_MUL128(poly64x2_t a, poly64x2_t b, const int c) __attribute__ ((__target__("pclmul")));
 static inline poly64x2_t CL_MUL128(poly64x2_t a, poly64x2_t b, const int c) {
     return (poly64x2_t)__builtin_ia32_pclmulqdq128 ((int64x2_t)a,(int64x2_t)b,c);
-}
+}*/
 poly64x2_t CL_MUL128x64(poly64x2_t r, poly64x2_t v, const int c)
 {
 	uint64_t x = r[c & 1];
@@ -248,7 +249,7 @@ static inline uint8x16_t REV128(uint8x16_t v) {
 #endif
 
 
-#if 1
+#if 0
 #include "kuznechik256.h" // таблицы
 static uint8x16_t LS4(uint8x16_t a)
 {
@@ -444,6 +445,7 @@ typedef struct {
   uint8x16_t K[10];
 } KuznCtx;
 
+#if defined(__PCLMUL__) && !defined(__GFNI__)
 uint8x16_t kuzn_encrypt(KuznCtx* ctx, const uint8x16_t a)
 {
     uint8x16_t S = a ^ ctx->K[0];
@@ -512,7 +514,7 @@ static void kuzn_key_expansion_(KuznCtx * ctx, const uint8_t* key, int klen, int
         K[j] = a; K[j+1] = b;
     }
 }
-static void kuzn_key_expansion(KuznCtx * ctx, const uint8_t* key, int klen, int ekb)
+void kuzn_key_expansion(KuznCtx * ctx, const uint8_t* key, int klen, int ekb)
 {
     uint8x16_t *K = ctx->K;
 	uint8x16_t a, b;
@@ -662,7 +664,7 @@ static inline uint8x16_t INCR_R(uint8x16_t v) {
 typedef struct {
 	KuznCtx *ctx;
 	uint8x16_t iv;
-	} Ciph;
+	} MgmCtx;
 typedef uint8x16_t (*CipherEncrypt128)(KuznCtx*, uint8x16_t);
 //static 
 static void print_hex(const char* fmt, int i, uint8x16_t v)
@@ -679,7 +681,7 @@ static void print_hexstr(const char* fmt, int i, uint8x16_t v)
 		printf(" %02X", v[i]);
 	printf("\n");
 }
-void MGM128_encrypt(Ciph*ciph, uint8x16_t* dst, const uint8_t* src, int length)
+void MGM128_encrypt(MgmCtx*ciph, uint8x16_t* dst, const uint8_t* src, int length)
 {
     CipherEncrypt128 encrypt = kuzn_encrypt;//(CipherEncrypt128)ciph->cipher->encrypt;
     uint8x16_t v, p;
@@ -709,7 +711,7 @@ void MGM128_encrypt(Ciph*ciph, uint8x16_t* dst, const uint8_t* src, int length)
     }
 }
 //static 
-uint8x16_t MGM128_tag(Ciph*ciph, const uint8_t* aad, int aad_len, const uint8_t* src, int length)
+uint8x16_t MGM128_tag(MgmCtx*ciph, const uint8_t* aad, int aad_len, const uint8_t* src, int length)
 {
     CipherEncrypt128 encrypt = kuzn_encrypt;//(CipherEncrypt128)ciph->cipher->encrypt;
     uint8x16_t v, p;
@@ -794,7 +796,7 @@ uint8x16_t MGM128_tag(Ciph*ciph, const uint8_t* aad, int aad_len, const uint8_t*
 	v = encrypt(ciph->ctx, v);
 	return REV128(v);
 }
-
+#ifdef TEST_KUZN_CLMUL
 #include <stdio.h>
 int main()
 {
@@ -841,7 +843,7 @@ int main()
 		0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xEE, 0xFF, 0x0A, 0x00,
 		0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xEE, 0xFF, 0x0A, 0x00, 0x11,
 		0xAA, 0xBB, 0xCC};
-		Ciph ciph = {.ctx = &ctx, 
+		MgmCtx ciph = {.ctx = &ctx, 
 		.iv = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x00, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88}};
 		ciph.iv = REV128(ciph.iv);
 		uint8x16_t dst[8];
@@ -901,7 +903,7 @@ int main()
 		"\xCF\x5D\x65\x6F\x40\xC3\x4F\x5C\x46\xE8\xBB\x0E\x29\xFC\xDB\x4C";
 		KuznCtx ctx;
 		kuzn_key_expansion(&ctx, (uint8_t*)key1, 32,0);
-		Ciph ciph;
+		MgmCtx ciph;
 		ciph.ctx = &ctx;
 		ciph.iv = REV128(icn);
 		uint8x16_t ct_[(sizeof(pt)+15)/16]= {0};
@@ -954,3 +956,16 @@ if (1){
 		if (__builtin_memcmp(&T, tag2, sizeof(tag2)-1)==0) printf("..ok\n");
 	}
 }
+#endif
+
+#include "cipher.h"
+CIPHER(GOST_R_3412_2015_KUZN)
+{
+    .id = CIPH_KUZNYECHIK,
+    .name = "GOST R 34.12-2015 (Kuznyechik)",
+    .block_len = 128,
+    .ctx_size = sizeof(KuznCtx),
+    .key_exp = (void*)kuzn_key_expansion,
+    .encrypt = (void*)kuzn_encrypt,
+};
+#endif
