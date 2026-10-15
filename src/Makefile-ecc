@@ -1,0 +1,52 @@
+#CC   = /usr/gcc/4.3/bin/gcc -m64 -march=native
+CC=gcc
+LD=ld
+CFLAGS = -O3 -Wall -march=native --std=c11 -DDEBUG_ECC
+# -O3
+# -Werror
+# -g3
+CFLAGS += $(shell pkg-config glib-2.0 --cflags)
+LDFLAGS = $(shell pkg-config glib-2.0 --libs)
+# -lsocket
+# -lnsl
+
+C_SOURCES = ecc.c ecc_edwards.c \
+ stribog.c sha.c sha512.c \
+ hmac.c cipher.c sign.c \
+ mp.c bn_asm.c \
+ rng_win32.c
+
+#	../../Daemon/src/cpro_sign.c
+#xer.c
+
+OUTPUT=ecc.exe
+
+BIN_DIR = bin
+OBJ_DIR = obj
+LST_DIR = lst
+OUTPUT := $(BIN_DIR)/$(OUTPUT)
+
+C_OBJECTS := $(addprefix $(OBJ_DIR)/, $(C_SOURCES:.c=.o))
+ASM_OBJECTS := $(addprefix $(OBJ_DIR)/, $(ASM_SOURCES:.S=.o))
+OBJ_DIRS := $(sort $(dir $(C_OBJECTS) $(ASM_OBJECTS)))
+
+OUTPUT_FILES = $(C_OBJECTS) $(ASM_OBJECTS) $(OUTPUT)
+MK_TARGET_DIR = mkdir -p $(@D)
+
+all: $(OUTPUT)
+
+$(OUTPUT): $(ASM_OBJECTS) $(C_OBJECTS)
+	$(CC) -o $(OUTPUT) $^ $(LDFLAGS)
+#       $(SIZE) $^ $(OUTPUT).elf
+
+$(ASM_OBJECTS): $(OBJ_DIR)/%.o : %.S
+	@$(MK_TARGET_DIR)
+	$(CC) $(ASFLAGS) -c -o $@ $<
+
+$(C_OBJECTS): $(OBJ_DIR)/%.o : %.c
+	@$(MK_TARGET_DIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(OUTPUT_FILES)
+
