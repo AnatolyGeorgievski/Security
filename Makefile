@@ -23,7 +23,7 @@ endif
 
 LIB = $(R3)/libr3_$(ARCH).a
 
-.PHONY: all clean cksum hmac
+.PHONY: all clean cksum hmac ttl
 all: gpg cksum
 
 SRC = src/gpg_sign.c src/gpg_armor.c src/sign.c src/rsa.c src/gzip.c
@@ -49,8 +49,11 @@ cksum: $(CKSUM_SRC) src/r3_args.c src/crc.h
 	$(CC) $(CFLAGS) -c -o src/r3_args.o src/r3_args.c -Dmain=r3_args_demo
 	$(CC) $(CFLAGS) -flax-vector-conversions -o $@ $(CKSUM_SRC) src/r3_args.o $(LDFLAGS)
 
+ttl: src/ttl_filter.c src/ttl_filter.h
+	$(CC) $(CFLAGS) -DTTL_FILTER_MAIN -o $@ src/ttl_filter.c $(LDFLAGS)
+
 clean:
-	rm -f gpg cksum hmac src/r3_args.o src/gosthash.o
+	rm -f gpg cksum hmac ttl src/r3_args.o src/gosthash.o
 
 # Отдельная цель: векторы из src/hmac.c (digest, HMAC, PBKDF2, KDF, HKDF).
 # SHA-224 берётся из src/sha.c. Там же свои SHA-1 и SHA-256, поэтому
