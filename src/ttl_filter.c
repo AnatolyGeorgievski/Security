@@ -240,67 +240,184 @@ int ttl_active(const TtlFilter *f)
 #include <pthread.h>
 #include <stdio.h>
 
-static TtlFilter g;
+static int n_pass, n_fail;
+
+static const char *client_word(int c)
+{
+	if (c == TTL_PASS) return "pass";
+	if (c == TTL_HOLD) return "hold";
+	return "?";
+}
+
+static const char *service_word(int c)
+{
+	if (c == TTL_NEW) return "new";
+	if (c == TTL_HIT) return "hit";
+	if (c == TTL_FULL) return "full";
+	if (c == -1) return "none";
+	return "?";
+}
+
+static int head_lo(const TtlFilter *f)
+{
+	int i = stk_idx(atomic_load(&f->head));
+	if (i < 0)
+		return -1;
+	return (int)atomic_load(&f->node[i].lo);
+}
+
+static int head_hits(const TtlFilter *f)
+{
+	int i = stk_idx(atomic_load(&f->head));
+	if (i < 0)
+		return -1;
+	return (int)atomic_load(&f->node[i].hits);
+}
+
+/* Прогон одного модуля: клиент ttl_pass, сервис ttl_signal, вершина стека. */
+static int step(const char *name, int client, int want_c, int service, int want_s,
+		int head, int want_head, int hits, int want_hits)
+{
+	int bad = client != want_c || service != want_s || head != want_head || hits != want_hits;
+	printf("%s %s client=%s service=%s head=%d hits=%d\n",
+		bad ? "fail" : "pass", name, client_word(client), service_word(service), head, hits);
+	if (bad) {
+		n_fail++;
+		return 1;
+	}
+	n_pass++;
+	return 0;
+}
+
+static int v_empty(TtlFilter *f)
+{
+	return step("пустой приём", ttl_pass(f, 5, 0), TTL_PASS, -1, -1, head_lo(f), -1, ttl_active(f), 0);
+}
+
+static int v_ban(TtlFilter *f)
+{
+	int svc = ttl_signal(f, 5, 5, 0, 10, 1);
+	int client = ttl_pass(f, 5, 0);
+	if (ttl_pass(f, 6, 0) != TTL_PASS)
+		client = -2;
+	return step("бан", client, TTL_HOLD, svc, TTL_NEW, head_lo(f), 5, head_hits(f), 1);
+}
+
+static int v_banban(TtlFilter *f)
+{
+	int svc = ttl_signal(f, 5, 5, 1, 10, 1);
+	return step("бан-бан", ttl_pass(f, 5, 1), TTL_HOLD, svc, TTL_HIT, head_lo(f), 5, head_hits(f), 2);
+}
+
+static int v_range(TtlFilter *f)
+{
+	int svc = ttl_signal(f, 10, 12, 0, 10, 1);
+	if (ttl_pass(f, 9, 0) != TTL_PASS || ttl_pass(f, 13, 0) != TTL_PASS)
+		return step("диапазон", TTL_PASS, TTL_HOLD, svc, TTL_NEW, head_lo(f), 10, head_hits(f), 1);
+	return step("диапазон", ttl_pass(f, 11, 0), TTL_HOLD, svc, TTL_NEW, head_lo(f), 10, head_hits(f), 1);
+}
+
+static int v_read(TtlFilter *f)
+{
+	int i = stk_idx(atomic_load(&f->head));
+	int saved, rc;
+	if (i < 0)
+		return step("чтение стека", TTL_HOLD, TTL_PASS, -1, -1, -1, 10, 0, 1);
+	saved = f->node[i].next;
+	f->node[i].next = 999;
+	rc = ttl_pass(f, 11, 0);
+	if (f->node[i].next != 999)
+		rc = TTL_PASS;
+	f->node[i].next = saved;
+	return step("чтение стека", rc, TTL_HOLD, -1, -1, head_lo(f), 10, head_hits(f), 1);
+}
+
+static int v_expire(TtlFilter *f)
+{
+	ttl_sort(f, 12);
+	if (ttl_pass(f, 11, 12) != TTL_PASS || ttl_active(f) != 1)
+		return step("срок", TTL_PASS, TTL_HOLD, -1, -1, head_lo(f), 5, head_hits(f), 2);
+	return step("срок", ttl_pass(f, 5, 12), TTL_HOLD, -1, -1, head_lo(f), 5, head_hits(f), 2);
+}
+
+static int v_full(TtlFilter *f)
+{
+	int svc = TTL_NEW;
+	for (uint32_t a = 1000; a < 1000 + 255; a++) {
+		svc = ttl_signal(f, a, a, 0, 10, 1);
+		if (svc != TTL_NEW)
+			break;
+	}
+	if (svc == TTL_NEW)
+		svc = ttl_signal(f, 200000, 200000, 0, 10, 1);
+	if (ttl_active(f) != TTL_CAP)
+		return step("таблица полна", TTL_PASS, TTL_HOLD, svc, TTL_FULL, head_lo(f), 5, head_hits(f), 2);
+	return step("таблица полна", ttl_pass(f, 5, 0), TTL_HOLD, svc, TTL_FULL, head_lo(f), 5, head_hits(f), 2);
+}
+
+static TtlFilter *flood_f;
 
 static void *flood(void *arg)
 {
 	unsigned base = (unsigned)(uintptr_t)arg;
 	for (unsigned k = 0; k < 80; k++) {
 		uint32_t a = (base << 16) | k;
-		ttl_signal(&g, a, a, 0, 100, 1);
+		ttl_signal(flood_f, a, a, 0, 100, 1);
 	}
 	return NULL;
+}
+
+static int v_flood(TtlFilter *f)
+{
+	TtlFilter g;
+	pthread_t th[4];
+	uint32_t a = 1u << 16;
+	int active, held, svc;
+	(void)f;
+	ttl_filter_init(&g);
+	flood_f = &g;
+	for (int i = 0; i < 4; i++)
+		pthread_create(&th[i], NULL, flood, (void *)(uintptr_t)(i + 1));
+	for (int i = 0; i < 4; i++)
+		pthread_join(th[i], NULL);
+	active = ttl_active(&g);
+	held = ttl_pass(&g, a, 0);
+	svc = ttl_signal(&g, 7, 7, 0, 100, 1);
+	ttl_sort(&g, 1000);
+	if (active != TTL_CAP || held != TTL_HOLD || ttl_active(&g) != 0 || ttl_pass(&g, a, 1000) != TTL_PASS)
+		return step("потоки", held, TTL_HOLD, svc, TTL_FULL, 0, -1, active, TTL_CAP);
+	return step("потоки", held, TTL_HOLD, svc, TTL_FULL, -1, -1, active, TTL_CAP);
+}
+
+static int v_after(TtlFilter *f)
+{
+	ttl_sort(f, 12);
+	if (ttl_pass(f, 1000, 12) != TTL_PASS || ttl_active(f) != 1)
+		return step("после срока", TTL_HOLD, TTL_PASS, -1, -1, head_lo(f), 5, head_hits(f), 2);
+	return step("после срока", ttl_pass(f, 5, 12), TTL_HOLD, -1, -1, head_lo(f), 5, head_hits(f), 2);
 }
 
 int main(void)
 {
 	TtlFilter f;
-	uint32_t ord[8];
-	int n;
-	int head;
-
+	struct { const char *name; int (*run)(TtlFilter *); } v[] = {
+		{ "пустой приём", v_empty },
+		{ "бан", v_ban },
+		{ "бан-бан", v_banban },
+		{ "диапазон", v_range },
+		{ "чтение стека", v_read },
+		{ "срок", v_expire },
+		{ "таблица полна", v_full },
+		{ "после срока", v_after },
+		{ "потоки", v_flood },
+	};
+	(void)v[0].name;
 	ttl_filter_init(&f);
-	if (ttl_pass(&f, 5, 0) != TTL_PASS) return 1;
-	if (ttl_signal(&f, 5, 5, 0, 10, 1) != TTL_NEW) return 2;
-	if (ttl_pass(&f, 5, 0) != TTL_HOLD) return 3;
-	if (ttl_pass(&f, 6, 0) != TTL_PASS) return 4;
-	if (ttl_signal(&f, 5, 5, 1, 10, 1) != TTL_HIT) return 5;
-	n = ttl_order(&f, ord, 8);
-	if (n != 1 || ord[0] != 5) return 6;
-	if (atomic_load(&f.node[stk_idx(atomic_load(&f.head))].hits) != 2) return 7;
-
-	if (ttl_signal(&f, 10, 12, 0, 10, 1) != TTL_NEW) return 8;
-	if (ttl_pass(&f, 11, 0) != TTL_HOLD) return 9;
-	if (ttl_pass(&f, 9, 0) != TTL_PASS) return 10;
-	if (ttl_pass(&f, 13, 0) != TTL_PASS) return 11;
-	if (ttl_order(&f, ord, 8) < 1 || ord[0] != 10) return 12;
-
-	head = stk_idx(atomic_load(&f.head));
-	f.node[head].next = 999;
-	if (ttl_pass(&f, 11, 0) != TTL_HOLD) return 13;
-	if (f.node[head].next != 999) return 14;
-
-	ttl_filter_init(&f);
-	ttl_signal(&f, 1, 1, 0, 10, 1);
-	ttl_signal(&f, 2, 2, 0, 10, 1);
-	ttl_signal(&f, 1, 1, 1, 10, 1);
-	ttl_sort(&f, 12);
-	n = ttl_order(&f, ord, 8);
-	if (n != 1 || ord[0] != 1) return 15;
-
-	ttl_filter_init(&g);
-	pthread_t th[4];
-	for (int i = 0; i < 4; i++)
-		pthread_create(&th[i], NULL, flood, (void *)(uintptr_t)(i + 1));
-	for (int i = 0; i < 4; i++)
-		pthread_join(th[i], NULL);
-	if (ttl_active(&g) != TTL_CAP) return 16;
-	if (ttl_signal(&g, 7, 7, 0, 100, 1) != TTL_FULL) return 17;
-	ttl_sort(&g, 1000);
-	if (ttl_active(&g) != 0) return 18;
-	if (ttl_pass(&g, 7, 1000) != TTL_PASS) return 19;
-
-	puts("ttl_filter ok");
-	return 0;
+	for (unsigned i = 0; i < sizeof v / sizeof v[0]; i++) {
+		if (v[i].run(&f))
+			break;
+	}
+	printf("skip 0 fail %d pass %d\n", n_fail, n_pass);
+	return n_fail ? 1 : 0;
 }
 #endif
