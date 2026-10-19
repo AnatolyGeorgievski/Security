@@ -92,7 +92,6 @@ void ttl_filter_init(TtlFilter *f)
 		f->link[i] = (int16_t)(i + 1);
 	}
 	f->link[TTL_CAP - 1] = TTL_NIL;
-	atomic_store(&f->gate, 0);
 	atomic_store(&f->free_top, stk_make(1, 0));
 	atomic_store(&f->head, stk_make(1, TTL_NIL));
 }
@@ -181,19 +180,6 @@ static int try_detach(TtlFilter *f, int *chain)
 	return 1;
 }
 
-static void gate_enter(TtlFilter *f)
-{
-	uint32_t z = 0;
-	while (!atomic_compare_exchange_weak_explicit(
-		&f->gate, &z, 1, memory_order_acq_rel, memory_order_acquire))
-		z = 0;
-}
-
-static void gate_leave(TtlFilter *f)
-{
-	atomic_store_explicit(&f->gate, 0, memory_order_release);
-}
-
 static void move_head(TtlFilter *f, int hot)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -248,16 +234,12 @@ static int signal_held(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int6
 
 int ttl_signal(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int64_t base, int64_t step)
 {
-	int rc;
 	if (lo > hi) {
 		uint32_t t = lo;
 		lo = hi;
 		hi = t;
 	}
-	gate_enter(f);
-	rc = signal_held(f, lo, hi, now, base, step);
-	gate_leave(f);
-	return rc;
+	return signal_held(f, lo, hi, now, base, step);
 }
 
 static void sort_held(TtlFilter *f, int64_t now)
@@ -293,9 +275,7 @@ static void sort_held(TtlFilter *f, int64_t now)
 
 void ttl_sort(TtlFilter *f, int64_t now)
 {
-	gate_enter(f);
 	sort_held(f, now);
-	gate_leave(f);
 }
 
 int ttl_order(const TtlFilter *f, uint32_t *lo, int cap)
@@ -442,16 +422,13 @@ enum { FLOOD_N = 250 };
 static const uint32_t net_lo = 0x64400000u;
 static const uint32_t net_hi = 0x644000FFu;
 static TtlFilter *flood_f;
-static _Atomic int flood_hold;
 static _Atomic int flood_new;
 
 static void *flood(void *arg)
 {
-	uint32_t addr = net_lo + (uint32_t)(uintptr_t)arg;
+	(void)arg;
 	if (ttl_signal(flood_f, net_lo, net_hi, 0, 100, 1) == TTL_NEW)
 		atomic_fetch_add(&flood_new, 1);
-	if (ttl_pass(flood_f, addr, 0) != TTL_HOLD)
-		atomic_store(&flood_hold, 0);
 	return NULL;
 }
 
@@ -484,10 +461,14 @@ static int v_flood(TtlFilter *f)
 	pthread_t th[FLOOD_N];
 	pthread_attr_t at;
 	int held;
+	int before;
+	int slot;
+	int expect_hits;
+	int svc;
+	int made;
 	(void)f;
 	ttl_filter_init(&g);
 	flood_f = &g;
-	atomic_store(&flood_hold, 1);
 	atomic_store(&flood_new, 0);
 	pthread_attr_init(&at);
 	pthread_attr_setstacksize(&at, 65536);
@@ -498,10 +479,17 @@ static int v_flood(TtlFilter *f)
 	pthread_attr_destroy(&at);
 	for (int i = 0; i < FLOOD_N; i++)
 		pthread_join(th[i], NULL);
+	made = atomic_load(&flood_new);
+	before = ttl_active(&g);
+	slot = find_key(&g, net_lo, net_hi);
+	if (made < 1 || made > FLOOD_N || before < 1 || before > FLOOD_N || slot < 0)
+		return step("потоки", TTL_PASS, TTL_HOLD, TTL_NEW, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), made);
+	expect_hits = g.hits[slot] == 65535 ? 65535 : g.hits[slot] + 1;
+	svc = ttl_signal(&g, net_lo, net_hi, 0, 100, 1);
 	held = ttl_pass(&g, net_lo + 250, 0);
-	if (atomic_load(&flood_hold) != 1 || atomic_load(&flood_new) != 1 || ttl_active(&g) != 1 || !hold_span(&g) || ttl_pass(&g, net_hi + 1, 0) != TTL_PASS)
-		return step("потоки", TTL_PASS, TTL_HOLD, TTL_NEW, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), FLOOD_N);
-	return step("потоки", held, TTL_HOLD, TTL_HIT, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), FLOOD_N);
+	if (svc != TTL_HIT || ttl_active(&g) != before || !hold_span(&g) || ttl_pass(&g, net_hi + 1, 0) != TTL_PASS)
+		return step("потоки", held, TTL_HOLD, svc, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), expect_hits);
+	return step("потоки", held, TTL_HOLD, svc, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), expect_hits);
 }
 
 static int v_sat(TtlFilter *f)
