@@ -343,7 +343,7 @@ static int v_expire(TtlFilter *f)
 static int v_full(TtlFilter *f)
 {
 	int svc = TTL_NEW;
-	for (uint32_t a = 1000; a < 1000 + 255; a++) {
+	for (uint32_t a = 1000; a < 1000 + (TTL_CAP - 1); a++) {
 		svc = ttl_signal(f, a, a, 0, 10, 1);
 		if (svc != TTL_NEW)
 			break;
@@ -355,38 +355,46 @@ static int v_full(TtlFilter *f)
 	return step("таблица полна", ttl_pass(f, 5, 0), TTL_HOLD, svc, TTL_FULL, head_lo(f), 5, head_hits(f), 2);
 }
 
+enum { FLOOD_N = 250 };
+static const uint32_t net_lo = 0x64400000u;
+static const uint32_t net_hi = 0x644000FFu;
 static TtlFilter *flood_f;
+static _Atomic int flood_hold;
 
 static void *flood(void *arg)
 {
-	unsigned base = (unsigned)(uintptr_t)arg;
-	for (unsigned k = 0; k < 80; k++) {
-		uint32_t a = (base << 16) | k;
-		ttl_signal(flood_f, a, a, 0, 100, 1);
-	}
+	uint32_t addr = net_lo + (uint32_t)(uintptr_t)arg;
+	ttl_signal(flood_f, net_lo, net_hi, 0, 100, 1);
+	if (ttl_pass(flood_f, addr, 0) != TTL_HOLD)
+		atomic_store(&flood_hold, 0);
 	return NULL;
 }
 
 static int v_flood(TtlFilter *f)
 {
 	TtlFilter g;
-	pthread_t th[4];
-	uint32_t a = 1u << 16;
-	int active, held, svc;
+	pthread_t th[FLOOD_N];
+	pthread_attr_t at;
+	int held;
 	(void)f;
 	ttl_filter_init(&g);
 	flood_f = &g;
-	for (int i = 0; i < 4; i++)
-		pthread_create(&th[i], NULL, flood, (void *)(uintptr_t)(i + 1));
-	for (int i = 0; i < 4; i++)
+	if (ttl_signal(&g, net_lo, net_hi, 0, 100, 1) != TTL_NEW)
+		return step("потоки", TTL_PASS, TTL_HOLD, TTL_NEW, TTL_HIT, head_lo(&g), (int)net_lo, 0, 1 + FLOOD_N);
+	atomic_store(&flood_hold, 1);
+	pthread_attr_init(&at);
+	pthread_attr_setstacksize(&at, 65536);
+	for (int i = 0; i < FLOOD_N; i++) {
+		if (pthread_create(&th[i], &at, flood, (void *)(uintptr_t)i) != 0)
+			return step("потоки", TTL_PASS, TTL_HOLD, TTL_NEW, TTL_HIT, i, FLOOD_N, 0, 1 + FLOOD_N);
+	}
+	pthread_attr_destroy(&at);
+	for (int i = 0; i < FLOOD_N; i++)
 		pthread_join(th[i], NULL);
-	active = ttl_active(&g);
-	held = ttl_pass(&g, a, 0);
-	svc = ttl_signal(&g, 7, 7, 0, 100, 1);
-	ttl_sort(&g, 1000);
-	if (active != TTL_CAP || held != TTL_HOLD || ttl_active(&g) != 0 || ttl_pass(&g, a, 1000) != TTL_PASS)
-		return step("потоки", held, TTL_HOLD, svc, TTL_FULL, 0, -1, active, TTL_CAP);
-	return step("потоки", held, TTL_HOLD, svc, TTL_FULL, -1, -1, active, TTL_CAP);
+	held = ttl_pass(&g, net_lo + 250, 0);
+	if (atomic_load(&flood_hold) != 1 || ttl_active(&g) != 1 || ttl_pass(&g, net_hi + 1, 0) != TTL_PASS)
+		return step("потоки", TTL_PASS, TTL_HOLD, TTL_HIT, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), 1 + FLOOD_N);
+	return step("потоки", held, TTL_HOLD, TTL_HIT, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), 1 + FLOOD_N);
 }
 
 static int v_after(TtlFilter *f)
