@@ -1,7 +1,9 @@
+/* Реализация контракта из ttl_filter.h. */
 #include "ttl_filter.h"
-#include <string.h>
 
 enum { TTL_NIL = -1 };
+
+_Static_assert(__atomic_always_lock_free(sizeof(uint64_t), 0), "ttl record");
 
 static int stk_idx(uint64_t h)
 {
@@ -20,7 +22,7 @@ static uint64_t stk_make(uint32_t gen, int idx)
 	return ((uint64_t)gen << 32) | u;
 }
 
-static int stk_pop(_Atomic uint64_t *top, TtlNode *node)
+static int stk_pop(_Atomic uint64_t *top, int16_t *link)
 {
 	uint64_t h;
 	do {
@@ -28,20 +30,20 @@ static int stk_pop(_Atomic uint64_t *top, TtlNode *node)
 		int i = stk_idx(h);
 		if (i < 0 || i >= TTL_CAP)
 			return TTL_NIL;
-		int nxt = node[i].next;
+		int next = link[i];
 		if (atomic_compare_exchange_weak_explicit(
-			top, &h, stk_make(stk_gen(h) + 1, nxt),
+			top, &h, stk_make(stk_gen(h) + 1, next),
 			memory_order_acq_rel, memory_order_acquire))
 			return i;
 	} while (1);
 }
 
-static void stk_push(_Atomic uint64_t *top, TtlNode *node, int i)
+static void stk_push(_Atomic uint64_t *top, int16_t *link, int i)
 {
 	uint64_t h;
 	do {
 		h = atomic_load_explicit(top, memory_order_acquire);
-		node[i].next = stk_idx(h);
+		link[i] = (int16_t)stk_idx(h);
 	} while (!atomic_compare_exchange_weak_explicit(
 		top, &h, stk_make(stk_gen(h) + 1, i),
 		memory_order_acq_rel, memory_order_acquire));
@@ -52,24 +54,72 @@ static int link_ok(int i)
 	return i == TTL_NIL || (i >= 0 && i < TTL_CAP);
 }
 
+static uint64_t rec_make(uint32_t lo, uint16_t width, uint16_t expire)
+{
+	return (uint64_t)lo | ((uint64_t)width << 32) | ((uint64_t)expire << 48);
+}
+
+static uint32_t rec_lo(uint64_t r)
+{
+	return (uint32_t)r;
+}
+
+static uint16_t rec_width(uint64_t r)
+{
+	return (uint16_t)(r >> 32);
+}
+
+static uint16_t rec_expire(uint64_t r)
+{
+	return (uint16_t)(r >> 48);
+}
+
+static void rec_store(TtlFilter *f, int i, uint32_t lo, uint16_t width, uint16_t expire)
+{
+	atomic_store_explicit(&f->node[i], rec_make(lo, width, expire), memory_order_release);
+}
+
+static uint64_t rec_load(const TtlFilter *f, int i)
+{
+	return atomic_load_explicit(&f->node[i], memory_order_acquire);
+}
+
 void ttl_filter_init(TtlFilter *f)
 {
-	memset(f, 0, sizeof *f);
 	for (int i = 0; i < TTL_CAP; i++) {
-		f->node[i].next = i + 1;
-		atomic_store(&f->node[i].lo, 0);
-		atomic_store(&f->node[i].hi, 0);
-		atomic_store(&f->node[i].hits, 0);
-		atomic_store(&f->node[i].expire, 0);
+		atomic_store_explicit(&f->node[i], 0, memory_order_relaxed);
+		f->hits[i] = 0;
+		f->link[i] = (int16_t)(i + 1);
 	}
-	f->node[TTL_CAP - 1].next = TTL_NIL;
+	f->link[TTL_CAP - 1] = TTL_NIL;
+	atomic_store(&f->gate, 0);
 	atomic_store(&f->free_top, stk_make(1, 0));
 	atomic_store(&f->head, stk_make(1, TTL_NIL));
 }
 
-static int64_t ttl_term(int64_t now, int64_t base, int64_t step, uint32_t hits)
+static uint16_t sat_width(uint32_t lo, uint32_t hi)
 {
-	return now + base + (int64_t)hits * step;
+	uint32_t span = hi - lo;
+	if (span > 65535u)
+		return 65535u;
+	return (uint16_t)span;
+}
+
+static uint16_t sat_hits(uint16_t hits)
+{
+	if (hits == 65535u)
+		return hits;
+	return (uint16_t)(hits + 1);
+}
+
+static uint16_t ttl_term(int64_t now, int64_t base, int64_t step, unsigned hits)
+{
+	int64_t term = now + base + (int64_t)hits * step;
+	if (term <= 0)
+		return 0;
+	if (term > 65535)
+		return 65535;
+	return (uint16_t)term;
 }
 
 int ttl_pass(const TtlFilter *f, uint32_t addr, int64_t now)
@@ -77,17 +127,18 @@ int ttl_pass(const TtlFilter *f, uint32_t addr, int64_t now)
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
 	int i = stk_idx(h);
 	for (int n = 0; n < TTL_CAP; n++) {
+		uint64_t r;
+		uint32_t lo;
 		if (!link_ok(i) || i < 0)
 			break;
-		uint32_t lo = atomic_load(&f->node[i].lo);
-		uint32_t hi = atomic_load(&f->node[i].hi);
-		int64_t exp = atomic_load(&f->node[i].expire);
-		if (exp > now && addr >= lo && addr <= hi)
+		r = rec_load(f, i);
+		lo = rec_lo(r);
+		if ((int64_t)rec_expire(r) > now && addr >= lo && addr <= lo + rec_width(r))
 			return TTL_HOLD;
-		int nxt = f->node[i].next;
-		if (!link_ok(nxt))
+		int next = f->link[i];
+		if (!link_ok(next))
 			break;
-		i = nxt;
+		i = next;
 	}
 	return TTL_PASS;
 }
@@ -95,21 +146,23 @@ int ttl_pass(const TtlFilter *f, uint32_t addr, int64_t now)
 static int find_key(const TtlFilter *f, uint32_t lo, uint32_t hi)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
+	uint16_t width = sat_width(lo, hi);
 	int i = stk_idx(h);
 	for (int n = 0; n < TTL_CAP; n++) {
+		uint64_t r;
 		if (!link_ok(i) || i < 0)
 			return TTL_NIL;
-		if (atomic_load(&f->node[i].lo) == lo && atomic_load(&f->node[i].hi) == hi)
+		r = rec_load(f, i);
+		if (rec_lo(r) == lo && rec_width(r) == width)
 			return i;
-		int nxt = f->node[i].next;
-		if (!link_ok(nxt))
+		int next = f->link[i];
+		if (!link_ok(next))
 			return TTL_NIL;
-		i = nxt;
+		i = next;
 	}
 	return TTL_NIL;
 }
 
-/* Одна попытка забрать цепочку. Неудачный CAS ничего не пишет. */
 static int try_detach(TtlFilter *f, int *chain)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -128,6 +181,19 @@ static int try_detach(TtlFilter *f, int *chain)
 	return 1;
 }
 
+static void gate_enter(TtlFilter *f)
+{
+	uint32_t z = 0;
+	while (!atomic_compare_exchange_weak_explicit(
+		&f->gate, &z, 1, memory_order_acq_rel, memory_order_acquire))
+		z = 0;
+}
+
+static void gate_leave(TtlFilter *f)
+{
+	atomic_store_explicit(&f->gate, 0, memory_order_release);
+}
+
 static void move_head(TtlFilter *f, int hot)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -140,51 +206,61 @@ static void move_head(TtlFilter *f, int hot)
 	int n = 0;
 	int seen = 0;
 	while (link_ok(chain) && chain >= 0 && n < TTL_CAP) {
-		int nxt = f->node[chain].next;
+		int next = f->link[chain];
 		if (chain == hot)
 			seen = 1;
 		else
 			idx[n++] = chain;
-		if (!link_ok(nxt))
+		if (!link_ok(next))
 			break;
-		chain = nxt;
+		chain = next;
 	}
 	for (int k = n - 1; k >= 0; k--)
-		stk_push(&f->head, f->node, idx[k]);
+		stk_push(&f->head, f->link, idx[k]);
 	if (seen)
-		stk_push(&f->head, f->node, hot);
+		stk_push(&f->head, f->link, hot);
+}
+
+static void sort_held(TtlFilter *f, int64_t now);
+static int signal_held(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int64_t base, int64_t step)
+{
+	int i = find_key(f, lo, hi);
+	if (i >= 0) {
+		uint64_t r = rec_load(f, i);
+		unsigned hits = sat_hits(f->hits[i]);
+		f->hits[i] = (uint16_t)hits;
+		rec_store(f, i, rec_lo(r), rec_width(r), ttl_term(now, base, step, hits));
+		move_head(f, i);
+		return TTL_HIT;
+	}
+	i = stk_pop(&f->free_top, f->link);
+	if (i < 0) {
+		sort_held(f, now);
+		i = stk_pop(&f->free_top, f->link);
+		if (i < 0)
+			return TTL_FULL;
+	}
+	f->hits[i] = 1;
+	rec_store(f, i, lo, sat_width(lo, hi), ttl_term(now, base, step, 1));
+	stk_push(&f->head, f->link, i);
+	return TTL_NEW;
 }
 
 int ttl_signal(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int64_t base, int64_t step)
 {
+	int rc;
 	if (lo > hi) {
 		uint32_t t = lo;
 		lo = hi;
 		hi = t;
 	}
-	int i = find_key(f, lo, hi);
-	if (i >= 0) {
-		uint32_t hits = atomic_fetch_add(&f->node[i].hits, 1) + 1;
-		atomic_store(&f->node[i].expire, ttl_term(now, base, step, hits));
-		move_head(f, i);
-		return TTL_HIT;
-	}
-	i = stk_pop(&f->free_top, f->node);
-	if (i < 0) {
-		ttl_sort(f, now);
-		i = stk_pop(&f->free_top, f->node);
-		if (i < 0)
-			return TTL_FULL;
-	}
-	atomic_store(&f->node[i].lo, lo);
-	atomic_store(&f->node[i].hi, hi);
-	atomic_store(&f->node[i].hits, 1);
-	atomic_store(&f->node[i].expire, ttl_term(now, base, step, 1));
-	stk_push(&f->head, f->node, i);
-	return TTL_NEW;
+	gate_enter(f);
+	rc = signal_held(f, lo, hi, now, base, step);
+	gate_leave(f);
+	return rc;
 }
 
-void ttl_sort(TtlFilter *f, int64_t now)
+static void sort_held(TtlFilter *f, int64_t now)
 {
 	int chain;
 	if (!try_detach(f, &chain))
@@ -192,27 +268,34 @@ void ttl_sort(TtlFilter *f, int64_t now)
 	int idx[TTL_CAP];
 	int n = 0;
 	while (link_ok(chain) && chain >= 0 && n < TTL_CAP) {
-		int nxt = f->node[chain].next;
-		int64_t exp = atomic_load(&f->node[chain].expire);
-		if (exp <= now) {
-			atomic_store(&f->node[chain].lo, 0);
-			atomic_store(&f->node[chain].hi, 0);
-			stk_push(&f->free_top, f->node, chain);
+		int next = f->link[chain];
+		uint64_t r = rec_load(f, chain);
+		if ((int64_t)rec_expire(r) <= now) {
+			atomic_store_explicit(&f->node[chain], 0, memory_order_relaxed);
+			f->hits[chain] = 0;
+			stk_push(&f->free_top, f->link, chain);
 		} else {
 			int p = n;
-			while (p > 0 && atomic_load(&f->node[idx[p - 1]].expire) < exp) {
+			while (p > 0 && rec_expire(rec_load(f, idx[p - 1])) < rec_expire(r)) {
 				idx[p] = idx[p - 1];
 				p--;
 			}
 			idx[p] = chain;
 			n++;
 		}
-		if (!link_ok(nxt))
+		if (!link_ok(next))
 			break;
-		chain = nxt;
+		chain = next;
 	}
 	for (int k = n - 1; k >= 0; k--)
-		stk_push(&f->head, f->node, idx[k]);
+		stk_push(&f->head, f->link, idx[k]);
+}
+
+void ttl_sort(TtlFilter *f, int64_t now)
+{
+	gate_enter(f);
+	sort_held(f, now);
+	gate_leave(f);
 }
 
 int ttl_order(const TtlFilter *f, uint32_t *lo, int cap)
@@ -221,11 +304,11 @@ int ttl_order(const TtlFilter *f, uint32_t *lo, int cap)
 	int i = stk_idx(h);
 	int n = 0;
 	while (link_ok(i) && i >= 0 && n < cap) {
-		lo[n++] = atomic_load(&f->node[i].lo);
-		int nxt = f->node[i].next;
-		if (!link_ok(nxt))
+		lo[n++] = rec_lo(rec_load(f, i));
+		int next = f->link[i];
+		if (!link_ok(next))
 			break;
-		i = nxt;
+		i = next;
 	}
 	return n;
 }
@@ -263,7 +346,7 @@ static int head_lo(const TtlFilter *f)
 	int i = stk_idx(atomic_load(&f->head));
 	if (i < 0)
 		return -1;
-	return (int)atomic_load(&f->node[i].lo);
+	return (int)rec_lo(rec_load(f, i));
 }
 
 static int head_hits(const TtlFilter *f)
@@ -271,7 +354,7 @@ static int head_hits(const TtlFilter *f)
 	int i = stk_idx(atomic_load(&f->head));
 	if (i < 0)
 		return -1;
-	return (int)atomic_load(&f->node[i].hits);
+	return (int)f->hits[i];
 }
 
 /* Прогон одного модуля: клиент ttl_pass, сервис ttl_signal, вершина стека. */
@@ -323,12 +406,12 @@ static int v_read(TtlFilter *f)
 	int saved, rc;
 	if (i < 0)
 		return step("чтение стека", TTL_HOLD, TTL_PASS, -1, -1, -1, 10, 0, 1);
-	saved = f->node[i].next;
-	f->node[i].next = 999;
+	saved = f->link[i];
+	f->link[i] = 999;
 	rc = ttl_pass(f, 11, 0);
-	if (f->node[i].next != 999)
+	if (f->link[i] != 999)
 		rc = TTL_PASS;
-	f->node[i].next = saved;
+	f->link[i] = (int16_t)saved;
 	return step("чтение стека", rc, TTL_HOLD, -1, -1, head_lo(f), 10, head_hits(f), 1);
 }
 
@@ -360,14 +443,39 @@ static const uint32_t net_lo = 0x64400000u;
 static const uint32_t net_hi = 0x644000FFu;
 static TtlFilter *flood_f;
 static _Atomic int flood_hold;
+static _Atomic int flood_new;
 
 static void *flood(void *arg)
 {
 	uint32_t addr = net_lo + (uint32_t)(uintptr_t)arg;
-	ttl_signal(flood_f, net_lo, net_hi, 0, 100, 1);
+	if (ttl_signal(flood_f, net_lo, net_hi, 0, 100, 1) == TTL_NEW)
+		atomic_fetch_add(&flood_new, 1);
 	if (ttl_pass(flood_f, addr, 0) != TTL_HOLD)
 		atomic_store(&flood_hold, 0);
 	return NULL;
+}
+
+static int hold_span(const TtlFilter *f)
+{
+	uint32_t a = net_lo;
+	uint32_t b = net_hi;
+	for (uint32_t x = net_lo; x <= net_hi; x++)
+		if (ttl_pass(f, x, 0) != TTL_HOLD)
+			return 0;
+	for (uint32_t x = net_hi; x > net_lo; x--)
+		if (ttl_pass(f, x, 0) != TTL_HOLD)
+			return 0;
+	if (ttl_pass(f, net_lo, 0) != TTL_HOLD)
+		return 0;
+	while (a < b) {
+		if (ttl_pass(f, a, 0) != TTL_HOLD || ttl_pass(f, b, 0) != TTL_HOLD)
+			return 0;
+		a++;
+		b--;
+	}
+	if (a == b && ttl_pass(f, a, 0) != TTL_HOLD)
+		return 0;
+	return 1;
 }
 
 static int v_flood(TtlFilter *f)
@@ -379,9 +487,8 @@ static int v_flood(TtlFilter *f)
 	(void)f;
 	ttl_filter_init(&g);
 	flood_f = &g;
-	if (ttl_signal(&g, net_lo, net_hi, 0, 100, 1) != TTL_NEW)
-		return step("потоки", TTL_PASS, TTL_HOLD, TTL_NEW, TTL_HIT, head_lo(&g), (int)net_lo, 0, 1 + FLOOD_N);
 	atomic_store(&flood_hold, 1);
+	atomic_store(&flood_new, 0);
 	pthread_attr_init(&at);
 	pthread_attr_setstacksize(&at, 65536);
 	for (int i = 0; i < FLOOD_N; i++) {
@@ -392,9 +499,27 @@ static int v_flood(TtlFilter *f)
 	for (int i = 0; i < FLOOD_N; i++)
 		pthread_join(th[i], NULL);
 	held = ttl_pass(&g, net_lo + 250, 0);
-	if (atomic_load(&flood_hold) != 1 || ttl_active(&g) != 1 || ttl_pass(&g, net_hi + 1, 0) != TTL_PASS)
-		return step("потоки", TTL_PASS, TTL_HOLD, TTL_HIT, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), 1 + FLOOD_N);
-	return step("потоки", held, TTL_HOLD, TTL_HIT, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), 1 + FLOOD_N);
+	if (atomic_load(&flood_hold) != 1 || atomic_load(&flood_new) != 1 || ttl_active(&g) != 1 || !hold_span(&g) || ttl_pass(&g, net_hi + 1, 0) != TTL_PASS)
+		return step("потоки", TTL_PASS, TTL_HOLD, TTL_NEW, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), FLOOD_N);
+	return step("потоки", held, TTL_HOLD, TTL_HIT, TTL_HIT, head_lo(&g), (int)net_lo, head_hits(&g), FLOOD_N);
+}
+
+static int v_sat(TtlFilter *f)
+{
+	TtlFilter g;
+	int slot;
+	int svc;
+	(void)f;
+	ttl_filter_init(&g);
+	svc = ttl_signal(&g, 0, 70000, 0, 1, 1);
+	if (svc != TTL_NEW || ttl_pass(&g, 65535, 0) != TTL_HOLD || ttl_pass(&g, 65536, 0) != TTL_PASS)
+		return step("насыщение", TTL_PASS, TTL_HOLD, svc, TTL_NEW, head_lo(&g), 0, head_hits(&g), 1);
+	slot = stk_idx(atomic_load(&g.head));
+	g.hits[slot] = 65535;
+	svc = ttl_signal(&g, 0, 70000, 0, 1, 1);
+	if (head_hits(&g) != 65535 || ttl_pass(&g, 0, 65535) != TTL_PASS)
+		return step("насыщение", TTL_PASS, TTL_HOLD, svc, TTL_HIT, head_lo(&g), 0, head_hits(&g), 65535);
+	return step("насыщение", ttl_pass(&g, 0, 65534), TTL_HOLD, svc, TTL_HIT, head_lo(&g), 0, head_hits(&g), 65535);
 }
 
 static int v_after(TtlFilter *f)
@@ -418,6 +543,7 @@ int main(void)
 		{ "таблица полна", v_full },
 		{ "после срока", v_after },
 		{ "потоки", v_flood },
+		{ "насыщение", v_sat },
 	};
 	(void)v[0].name;
 	ttl_filter_init(&f);
