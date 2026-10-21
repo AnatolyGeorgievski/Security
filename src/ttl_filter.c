@@ -1,27 +1,41 @@
-/* Реализация контракта из ttl_filter.h. */
+/*! \file ttl_filter.c
+ * Контракт приёма. Публичные слова — в ttl_filter.h.
+ *
+ * Фильтр молчит на живой записи и с кучи не растёт.
+ * Голова стека — одно слово: поколение и индекс. Запись — одно атомарное слово.
+ * Разведка ставит один бит маски службы. Фильтр эту маску не читает.
+ *
+ * flood — сленг: пачка потоков, бьющих в один отрезок.
+ * hits — число сигналов по этой записи.
+ * sat — остановка ширины и счётчика на 65535.
+ */
 #include "ttl_filter.h"
 
 enum { TTL_NIL = -1 };
 
 _Static_assert(__atomic_always_lock_free(sizeof(uint64_t), 0), "ttl record");
 
+/* Индекс из слова головы. Пустая голова — TTL_NIL. */
 static int stk_idx(uint64_t h)
 {
 	uint32_t u = (uint32_t)h;
 	return u == 0xFFFFFFFFu ? TTL_NIL : (int)u;
 }
 
+/* Поколение слова головы. Растёт на каждый успешный CAS. */
 static uint32_t stk_gen(uint64_t h)
 {
 	return (uint32_t)(h >> 32);
 }
 
+/* Слово головы: поколение сверху, индекс снизу. */
 static uint64_t stk_make(uint32_t gen, int idx)
 {
 	uint32_t u = idx < 0 ? 0xFFFFFFFFu : (uint32_t)idx;
 	return ((uint64_t)gen << 32) | u;
 }
 
+/* Снять вершину стека. Неудачный CAS повторяет чтение. */
 static int stk_pop(_Atomic uint64_t *top, int16_t *link)
 {
 	uint64_t h;
@@ -38,6 +52,7 @@ static int stk_pop(_Atomic uint64_t *top, int16_t *link)
 	} while (1);
 }
 
+/* Положить индекс на вершину. Звено пишется до удачного CAS. */
 static void stk_push(_Atomic uint64_t *top, int16_t *link, int i)
 {
 	uint64_t h;
@@ -49,41 +64,49 @@ static void stk_push(_Atomic uint64_t *top, int16_t *link, int i)
 		memory_order_acq_rel, memory_order_acquire));
 }
 
+/* Индекс внутри таблицы или пустое звено. */
 static int link_ok(int i)
 {
 	return i == TTL_NIL || (i >= 0 && i < TTL_CAP);
 }
 
+/* Слово записи: адрес, ширина отрезка, срок. */
 static uint64_t rec_make(uint32_t lo, uint16_t width, uint16_t expire)
 {
 	return (uint64_t)lo | ((uint64_t)width << 32) | ((uint64_t)expire << 48);
 }
 
+/* Нижняя граница отрезка. */
 static uint32_t rec_lo(uint64_t r)
 {
 	return (uint32_t)r;
 }
 
+/* Ширина отрезка. Адрес lo + ширина ещё внутри. */
 static uint16_t rec_width(uint64_t r)
 {
 	return (uint16_t)(r >> 32);
 }
 
+/* Срок записи. Поле TTL пакета сюда не входит. */
 static uint16_t rec_expire(uint64_t r)
 {
 	return (uint16_t)(r >> 48);
 }
 
+/* Записать слово записи. Читатель видит его после release. */
 static void rec_store(TtlFilter *f, int i, uint32_t lo, uint16_t width, uint16_t expire)
 {
 	atomic_store_explicit(&f->node[i], rec_make(lo, width, expire), memory_order_release);
 }
 
+/* Прочитать слово записи. */
 static uint64_t rec_load(const TtlFilter *f, int i)
 {
 	return atomic_load_explicit(&f->node[i], memory_order_acquire);
 }
 
+/* Контракт: ttl_filter.h. Свободный стек полон, голова пуста. */
 void ttl_filter_init(TtlFilter *f)
 {
 	for (int i = 0; i < TTL_CAP; i++) {
@@ -96,6 +119,7 @@ void ttl_filter_init(TtlFilter *f)
 	atomic_store(&f->head, stk_make(1, TTL_NIL));
 }
 
+/* sat: ширина отрезка, не выше 65535. */
 static uint16_t sat_width(uint32_t lo, uint32_t hi)
 {
 	uint32_t span = hi - lo;
@@ -104,6 +128,7 @@ static uint16_t sat_width(uint32_t lo, uint32_t hi)
 	return (uint16_t)span;
 }
 
+/* hits: число сигналов по записи. На 65535 дальше не растёт. */
 static uint16_t sat_hits(uint16_t hits)
 {
 	if (hits == 65535u)
@@ -111,6 +136,7 @@ static uint16_t sat_hits(uint16_t hits)
 	return (uint16_t)(hits + 1);
 }
 
+/* Срок = now + base + hits × step, не выше 65535. */
 static uint16_t ttl_term(int64_t now, int64_t base, int64_t step, unsigned hits)
 {
 	int64_t term = now + base + (int64_t)hits * step;
@@ -121,6 +147,7 @@ static uint16_t ttl_term(int64_t now, int64_t base, int64_t step, unsigned hits)
 	return (uint16_t)term;
 }
 
+/* Контракт: ttl_filter.h. Живая запись — TTL_HOLD, иначе TTL_PASS. */
 int ttl_pass(const TtlFilter *f, uint32_t addr, int64_t now)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -142,6 +169,7 @@ int ttl_pass(const TtlFilter *f, uint32_t addr, int64_t now)
 	return TTL_PASS;
 }
 
+/* Та же пара границ. Нет — TTL_NIL. */
 static int find_key(const TtlFilter *f, uint32_t lo, uint32_t hi)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -162,6 +190,7 @@ static int find_key(const TtlFilter *f, uint32_t lo, uint32_t hi)
 	return TTL_NIL;
 }
 
+/* Снять цепочку с головы одним CAS. Не вышло — стек как был. */
 static int try_detach(TtlFilter *f, int *chain)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -180,6 +209,7 @@ static int try_detach(TtlFilter *f, int *chain)
 	return 1;
 }
 
+/* hot — запись, которую ставят на вершину. Уже там — выход. */
 static void move_head(TtlFilter *f, int hot)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -208,6 +238,7 @@ static void move_head(TtlFilter *f, int hot)
 }
 
 static void sort_held(TtlFilter *f, int64_t now);
+/* Повтор растит hits и срок. Новая ячейка — TTL_NEW. Места нет — TTL_FULL. */
 static int signal_held(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int64_t base, int64_t step)
 {
 	int i = find_key(f, lo, hi);
@@ -232,6 +263,7 @@ static int signal_held(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int6
 	return TTL_NEW;
 }
 
+/* Контракт: ttl_filter.h. Границы приводит к lo <= hi. */
 int ttl_signal(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int64_t base, int64_t step)
 {
 	if (lo > hi) {
@@ -242,6 +274,7 @@ int ttl_signal(TtlFilter *f, uint32_t lo, uint32_t hi, int64_t now, int64_t base
 	return signal_held(f, lo, hi, now, base, step);
 }
 
+/* Срок вышел — ячейка в свободный стек. Живые — по убыванию срока. */
 static void sort_held(TtlFilter *f, int64_t now)
 {
 	int chain;
@@ -273,11 +306,13 @@ static void sort_held(TtlFilter *f, int64_t now)
 		stk_push(&f->head, f->link, idx[k]);
 }
 
+/* Контракт: ttl_filter.h. */
 void ttl_sort(TtlFilter *f, int64_t now)
 {
 	sort_held(f, now);
 }
 
+/* Контракт: ttl_filter.h. Адреса от вершины. */
 int ttl_order(const TtlFilter *f, uint32_t *lo, int cap)
 {
 	uint64_t h = atomic_load_explicit(&f->head, memory_order_acquire);
@@ -293,6 +328,7 @@ int ttl_order(const TtlFilter *f, uint32_t *lo, int cap)
 	return n;
 }
 
+/* Контракт: ttl_filter.h. Число живых записей. */
 int ttl_active(const TtlFilter *f)
 {
 	uint32_t tmp[TTL_CAP];
@@ -421,9 +457,15 @@ static int v_full(TtlFilter *f)
 enum { FLOOD_N = 250 };
 static const uint32_t net_lo = 0x64400000u;
 static const uint32_t net_hi = 0x644000FFu;
+/* flood — пачка потоков в один отрезок. flood_f — фильтр этой пачки. */
 static TtlFilter *flood_f;
+/* Сколько потоков пачки увидели первую запись.
+   Прибавление: lock incl.
+   volatile на том же -O3: movl, incl, movl, без lock.
+ */
 static _Atomic int flood_new;
 
+/* Один поток пачки. Первая запись отрезка увеличивает flood_new. */
 static void *flood(void *arg)
 {
 	(void)arg;
@@ -432,6 +474,7 @@ static void *flood(void *arg)
 	return NULL;
 }
 
+/* Каждый адрес отрезка даёт TTL_HOLD. Край за отрезком сюда не входит. */
 static int hold_span(const TtlFilter *f)
 {
 	uint32_t a = net_lo;
@@ -455,6 +498,7 @@ static int hold_span(const TtlFilter *f)
 	return 1;
 }
 
+/* Прогон пачки: много потоков, один отрезок, один счётчик первых записей. */
 static int v_flood(TtlFilter *f)
 {
 	TtlFilter g;
@@ -518,6 +562,27 @@ static int v_after(TtlFilter *f)
 	return step("после срока", ttl_pass(f, 5, 12), TTL_HOLD, -1, -1, head_lo(f), 5, head_hits(f), 2);
 }
 
+
+static int v_mark(TtlFilter *f)
+{
+	(void)f;
+	_Atomic unsigned flags = 0;
+	unsigned prev = ttl_mark(&flags, TTL_NEW);
+	int bad = prev != 0 || flags != TTL_BIT_NEW;
+	prev = ttl_mark(&flags, TTL_NEW);
+	bad |= prev != TTL_BIT_NEW || flags != TTL_BIT_NEW;
+	prev = ttl_mark(&flags, TTL_HIT);
+	bad |= prev != TTL_BIT_NEW || flags != (TTL_BIT_NEW | TTL_BIT_HIT);
+	prev = ttl_mark(&flags, TTL_FULL);
+	bad |= (flags & TTL_BIT_FULL) == 0;
+	prev = ttl_mark(&flags, TTL_MISS);
+	bad |= flags != (TTL_BIT_NEW | TTL_BIT_HIT | TTL_BIT_FULL) || prev != 0;
+	printf("%s бит flags=%u\n", bad ? "fail" : "pass", flags);
+	if (bad) { n_fail++; return 1; }
+	n_pass++;
+	return 0;
+}
+
 int main(void)
 {
 	TtlFilter f;
@@ -532,6 +597,7 @@ int main(void)
 		{ "после срока", v_after },
 		{ "потоки", v_flood },
 		{ "насыщение", v_sat },
+		{ "бит", v_mark },
 	};
 	(void)v[0].name;
 	ttl_filter_init(&f);

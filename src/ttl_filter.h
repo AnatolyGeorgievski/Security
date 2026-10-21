@@ -3,8 +3,8 @@
 #include <stdatomic.h>
 #include <stdint.h>
 
-/*
- * Фильтр приёма
+/*! \file ttl_filter.h
+ * Фильтр приёма. Контракт файла.
  *
  * Сервис публикует, хранит и выдаёт. Информационная безопасность —
  * каркас этих операций. Фильтр держит приём: собирает сигналы отказа
@@ -40,7 +40,7 @@ typedef union {
 	struct {
 		_Atomic uint64_t node[TTL_CAP];
 		int16_t link[TTL_CAP];
-		uint16_t hits[TTL_CAP];
+		uint16_t hits[TTL_CAP]; /* hits — число сигналов по записи */
 		_Atomic uint64_t head;
 		_Atomic uint64_t free_top;
 	};
@@ -74,4 +74,18 @@ int  ttl_order(const TtlFilter *f, uint32_t *lo, int cap);
 
 /* Число живых записей, не больше TTL_CAP. */
 int  ttl_active(const TtlFilter *f);
+
+/* Разведка приёма. Маска у службы, не в фильтре.
+   Один код — один бит. Повтор ставит тот же бит. */
+enum { TTL_BIT_NEW = 1u << 0, TTL_BIT_HIT = 1u << 1, TTL_BIT_FULL = 1u << 2 };
+
+static inline unsigned ttl_mark(_Atomic unsigned *flags, int code)
+{
+	unsigned bit = 0;
+	if (code == TTL_NEW) bit = TTL_BIT_NEW;
+	else if (code == TTL_HIT) bit = TTL_BIT_HIT;
+	else if (code == TTL_FULL) bit = TTL_BIT_FULL;
+	if (!bit) return 0;
+	return (unsigned)atomic_fetch_or(flags, bit);
+}
 #endif

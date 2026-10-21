@@ -12,6 +12,7 @@
 - log/2026-10-14 модели мышления.md
 - log/2026-10-14 принципы оптимизации.md
 - log/2026-10-20 информационная безопасность.md
+- log/2026-10-21 разведка и защита.md
 </refs>
 
 ## Чтение
@@ -25,6 +26,7 @@
 | throughput | [принципы оптимизации](log/2026-10-14%20%D0%BF%D1%80%D0%B8%D0%BD%D1%86%D0%B8%D0%BF%D1%8B%20%D0%BE%D0%BF%D1%82%D0%B8%D0%BC%D0%B8%D0%B7%D0%B0%D1%86%D0%B8%D0%B8.md) |
 | квант, остаток | [журнал QuantumNN](https://github.com/AnatolyGeorgievski/QuantumNN/blob/main/log/2026-10-15.md) |
 | prng | [журнал MWC128](https://github.com/AnatolyGeorgievski/MWC128/blob/main/log/2026-10-15.md) |
+| разведка, защита | [разведка и защита](log/2026-10-21%20разведка%20и%20защита.md) |
 | herd, react | [фрактальная карта e9pro](https://github.com/AnatolyGeorgievski/godminer/blob/main/log/2026-10-14%20%D1%84%D1%80%D0%B0%D0%BA%D1%82%D0%B0%D0%BB%D1%8C%D0%BD%D0%B0%D1%8F%20%D0%BA%D0%B0%D1%80%D1%82%D0%B0%20e9pro.md#следующая-стыковка) |
 
 Место, где пишутся и проверяются криптографические алгоритмы до того, как они входят в `R3-lib`. Свой код, без OpenSSL и libgcrypt. Сборка — обычный Linux, ключи те же, что у godminer: `-O3`, `-march=native` (armv7 / aarch64 — свои `-march`), `-ffast-math`, `-ftree-vectorize`, `-fPIC`.
